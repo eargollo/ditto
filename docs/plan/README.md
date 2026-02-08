@@ -29,7 +29,7 @@ This folder holds the phased implementation plan for Ditto. The plan is driven b
 | Phase | Document | Status |
 |-------|----------|--------|
 | 1 | [phase-1-foundation.md](phase-1-foundation.md) | Ready |
-| 2 | `phase-2-scan.md` | Not started |
+| 2 | [phase-2-scan.md](phase-2-scan.md) | Ready |
 | 3 | `phase-3-hash-pipeline.md` | Not started |
 | 4 | `phase-4-web-ui-shell.md` | Not started |
 | 5 | `phase-5-web-ui-scans-and-results.md` | Not started |
