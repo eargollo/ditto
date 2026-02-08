@@ -19,3 +19,4 @@ This folder contains **Architecture Decision Records (ADRs)** for the Ditto proj
 | ADR-004   | HTMX and Tailwind for the Web UI                         |
 | ADR-005   | Separate scan from hashing with prioritized hash queue   |
 | ADR-006   | SHA-256 hashing and duplicate definition (symlinks, hardlinks) |
+| ADR-007   | Absolute paths and scan as source of freshness and deletion     |

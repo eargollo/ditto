@@ -47,6 +47,13 @@ func GetScan(ctx context.Context, db *sql.DB, id int64) (*Scan, error) {
 	return &Scan{ID: rowID, CreatedAt: createdAt.Time, CompletedAt: completedAt.Ptr(), RootPath: rootPath}, nil
 }
 
+// UpdateScanCompletedAt sets completed_at to now for the given scan. Call when a scan run has finished.
+func UpdateScanCompletedAt(ctx context.Context, db *sql.DB, scanID int64) error {
+	completedAt := time.Now().UTC().Format(time.RFC3339)
+	_, err := db.ExecContext(ctx, "UPDATE scans SET completed_at = ? WHERE id = ?", completedAt, scanID)
+	return err
+}
+
 // ListScans returns all scans ordered by created_at descending (newest first).
 func ListScans(ctx context.Context, db *sql.DB) ([]Scan, error) {
 	rows, err := db.QueryContext(ctx,

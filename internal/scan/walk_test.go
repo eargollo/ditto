@@ -58,8 +58,8 @@ func TestWalk_yieldsOnlyRegularFilesSkipsSymlinks(t *testing.T) {
 	if e.Size != 5 {
 		t.Errorf("Size = %d, want 5", e.Size)
 	}
-	if e.Inode == 0 && e.DeviceID == 0 {
-		t.Log("Inode/DeviceID are 0 (may be unsupported on this OS)")
+	if e.Inode == 0 && e.DeviceID == nil {
+		t.Log("Inode/DeviceID unset (may be unsupported on this OS)")
 	}
 }
 

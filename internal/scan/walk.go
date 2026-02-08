@@ -9,12 +9,13 @@ import (
 )
 
 // Entry holds metadata for a single regular file (no content).
+// DeviceID is nil when the OS does not provide a device id (e.g. Windows).
 type Entry struct {
 	Path     string
 	Size     int64
 	MTime    int64
 	Inode    int64
-	DeviceID int64
+	DeviceID *int64
 }
 
 // Walk traverses root and calls fn for each regular file. Symlinks are not
@@ -49,13 +50,21 @@ func Walk(ctx context.Context, root string, excludePatterns []string, fn func(En
 		if err != nil {
 			return err
 		}
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
 		inode, dev := inodeAndDev(info)
+		var deviceID *int64
+		if dev != 0 {
+			deviceID = &dev
+		}
 		e := Entry{
-			Path:     path,
+			Path:     absPath,
 			Size:     info.Size(),
 			MTime:    info.ModTime().Unix(),
 			Inode:    inode,
-			DeviceID: dev,
+			DeviceID: deviceID,
 		}
 		return fn(e)
 	})
