@@ -66,19 +66,20 @@
 
 ---
 
-## Step 4: Optional scan throttle
+## Step 4: Optional scan throttle (files per second)
 
-**What:** Support optional throttling for the scan phase (ADR-005): e.g. max files per second or “yield/sleep every N files” so the NAS stays responsive. Default: off or very permissive (e.g. no sleep). Config or options struct holds the setting.
+**What:** Support optional throttling for the scan phase (ADR-005) by limiting files yielded per second so the NAS stays responsive. Use **`golang.org/x/time/rate`**: when `MaxFilesPerSecond > 0`, call `limiter.Wait(ctx)` before each `fn(e)` so we don’t exceed the rate; when **0**, no throttle and we go full speed.
 
 **TDD:**
-- Test: with throttle enabled (e.g. 1 file per 100ms), walk a dir with 3 files; assert elapsed time is at least ~200ms (two delays after first file).
-- Test: with throttle disabled (default), walk is fast (no artificial delay).
+- Test: with throttle enabled (e.g. 10 files/s), walk a dir with 3 files; assert elapsed time is at least ~200ms (two delays after first file). Use generous margins so tests don’t flake.
+- Test: with throttle disabled (`MaxFilesPerSecond == 0`), walk is fast (no artificial delay).
 
 **Deliverables:**
-- `ScanOptions` (or config) gains e.g. `MaxFilesPerSecond int` (0 = no throttle). In the walk loop, after yielding each file, if throttle enabled, sleep so we don’t exceed the rate.
-- Optional: cap on concurrent walkers if we later parallelize; for a single-threaded walk, rate limit is the main lever.
+- Add dependency: `golang.org/x/time/rate`.
+- `ScanOptions` gains `MaxFilesPerSecond int` (0 = no throttle, full speed). In `RunScan`, pass it into `Walk`. In the walk loop, when `MaxFilesPerSecond > 0`, create `rate.NewLimiter(rate.Limit(maxFilesPerSecond), 1)` (burst 1 for smooth rate) and before each `fn(e)` call `limiter.Wait(ctx)`; when 0, skip the limiter so there is no overhead.
+- Optional later: cap on concurrent walkers if we parallelize; for now, rate limit is the only lever.
 
-**Review:** Default is no throttle; rate limit is applied when set; tests don’t flake (use generous margins for timing).
+**Review:** Default 0 means full speed; rate limit is applied only when set; tests use generous timing margins.
 
 ---
 

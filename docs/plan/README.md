@@ -21,6 +21,7 @@ This folder holds the phased implementation plan for Ditto. The plan is driven b
 | **4** | Web UI shell | HTTP server, Tailwind build, HTMX, base layout and static assets. Placeholder pages. No auth (v1). Configurable port. |
 | **5** | Web UI – Scans and results | Configure scan roots, start scan, show progress (e.g. HTMX polling). List duplicate groups (by hash and by inode). View group details and file list. |
 | **6** | Actions and delivery | User actions on duplicates (e.g. delete selected, keep one). Excludes and throttle settings in the UI. Docker image, docker-compose example, and usage docs for Synology. |
+| **7** | Recovery from failure | Robust recovery when the process or system fails during hash (or scan) phase: e.g. reset orphaned `hashing` to `pending`, optional lease/timeout or run-id so hash phase can complete after restart. |
 
 ---
 
@@ -28,9 +29,10 @@ This folder holds the phased implementation plan for Ditto. The plan is driven b
 
 | Phase | Document | Status |
 |-------|----------|--------|
-| 1 | [phase-1-foundation.md](phase-1-foundation.md) | Ready |
-| 2 | [phase-2-scan.md](phase-2-scan.md) | Ready |
-| 3 | `phase-3-hash-pipeline.md` | Not started |
+| 1 | [phase-1-foundation.md](phase-1-foundation.md) | Done |
+| 2 | [phase-2-scan.md](phase-2-scan.md) | Done |
+| 3 | [phase-3-hash-pipeline.md](phase-3-hash-pipeline.md) | Ready |
 | 4 | `phase-4-web-ui-shell.md` | Not started |
 | 5 | `phase-5-web-ui-scans-and-results.md` | Not started |
 | 6 | `phase-6-actions-and-delivery.md` | Not started |
+| 7 | `phase-7-recovery-from-failure.md` | Not started |

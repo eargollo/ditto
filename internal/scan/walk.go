@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"golang.org/x/time/rate"
 )
 
 // Entry holds metadata for a single regular file (no content).
@@ -23,7 +25,13 @@ type Entry struct {
 // Uses Lstat so symlink targets are never followed.
 // If excludePatterns is non-nil and non-empty, paths matching any pattern are skipped
 // (see ShouldExclude). Excluded directories are not recursed into.
-func Walk(ctx context.Context, root string, excludePatterns []string, fn func(Entry) error) error {
+// If maxFilesPerSecond > 0, fn is rate-limited to that many files per second (burst 1);
+// if 0, no throttle (full speed).
+func Walk(ctx context.Context, root string, excludePatterns []string, maxFilesPerSecond int, fn func(Entry) error) error {
+	var limiter *rate.Limiter
+	if maxFilesPerSecond > 0 {
+		limiter = rate.NewLimiter(rate.Limit(maxFilesPerSecond), 1)
+	}
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -65,6 +73,11 @@ func Walk(ctx context.Context, root string, excludePatterns []string, fn func(En
 			MTime:    info.ModTime().Unix(),
 			Inode:    inode,
 			DeviceID: deviceID,
+		}
+		if limiter != nil {
+			if err := limiter.Wait(ctx); err != nil {
+				return err
+			}
 		}
 		return fn(e)
 	})

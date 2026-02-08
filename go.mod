@@ -2,7 +2,10 @@ module github.com/eargollo/ditto
 
 go 1.24.0
 
-require modernc.org/sqlite v1.44.3
+require (
+	golang.org/x/time v0.14.0
+	modernc.org/sqlite v1.44.3
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

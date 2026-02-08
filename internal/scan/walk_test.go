@@ -12,7 +12,7 @@ func TestWalk_emptyDirYieldsNothing(t *testing.T) {
 	ctx := context.Background()
 
 	var count int
-	err := Walk(ctx, dir, nil, func(e Entry) error {
+	err := Walk(ctx, dir, nil, 0, func(e Entry) error {
 		count++
 		return nil
 	})
@@ -41,7 +41,7 @@ func TestWalk_yieldsOnlyRegularFilesSkipsSymlinks(t *testing.T) {
 	}
 
 	var entries []Entry
-	err := Walk(ctx, dir, nil, func(e Entry) error {
+	err := Walk(ctx, dir, nil, 0, func(e Entry) error {
 		entries = append(entries, e)
 		return nil
 	})
@@ -79,7 +79,7 @@ func TestWalk_nestedDirsYieldsRegularFilesAtAnyDepth(t *testing.T) {
 	}
 
 	var paths []string
-	err := Walk(ctx, dir, nil, func(e Entry) error {
+	err := Walk(ctx, dir, nil, 0, func(e Entry) error {
 		paths = append(paths, e.Path)
 		return nil
 	})
@@ -114,7 +114,7 @@ func TestWalk_excludedDirSkipsSubtree(t *testing.T) {
 	}
 
 	var paths []string
-	err := Walk(ctx, dir, patterns, func(e Entry) error {
+	err := Walk(ctx, dir, patterns, 0, func(e Entry) error {
 		paths = append(paths, e.Path)
 		return nil
 	})
@@ -142,7 +142,7 @@ func TestWalk_excludedFileNotYielded(t *testing.T) {
 	}
 
 	var paths []string
-	err := Walk(ctx, dir, patterns, func(e Entry) error {
+	err := Walk(ctx, dir, patterns, 0, func(e Entry) error {
 		paths = append(paths, e.Path)
 		return nil
 	})
@@ -164,7 +164,7 @@ func TestWalk_noExcludesYieldsAllRegularFiles(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	var count int
-	err := Walk(ctx, dir, nil, func(e Entry) error {
+	err := Walk(ctx, dir, nil, 0, func(e Entry) error {
 		count++
 		return nil
 	})

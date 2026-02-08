@@ -10,9 +10,12 @@ import (
 	"github.com/eargollo/ditto/internal/db"
 )
 
-// ScanOptions configures a scan run (excludes and optional throttle in later steps).
+// ScanOptions configures a scan run (excludes and optional throttle).
+// MaxFilesPerSecond limits how many files are yielded per second during the walk;
+// 0 means no throttle (full speed).
 type ScanOptions struct {
-	ExcludePatterns []string
+	ExcludePatterns   []string
+	MaxFilesPerSecond int
 }
 
 // RunScan walks rootPath, inserts file rows for each regular file (respecting excludes),
@@ -33,8 +36,10 @@ func RunScan(ctx context.Context, database *sql.DB, rootPath string, opts *ScanO
 	}
 
 	var patterns []string
-	if opts != nil && len(opts.ExcludePatterns) > 0 {
+	var maxFilesPerSecond int
+	if opts != nil {
 		patterns = opts.ExcludePatterns
+		maxFilesPerSecond = opts.MaxFilesPerSecond
 	}
 
 	s, err := db.CreateScan(ctx, database, rootPath)
@@ -43,7 +48,7 @@ func RunScan(ctx context.Context, database *sql.DB, rootPath string, opts *ScanO
 	}
 	scanID := s.ID
 
-	err = Walk(ctx, rootPath, patterns, func(e Entry) error {
+	err = Walk(ctx, rootPath, patterns, maxFilesPerSecond, func(e Entry) error {
 		return db.InsertFile(ctx, database, scanID, e.Path, e.Size, e.MTime, e.Inode, e.DeviceID)
 	})
 	if err != nil {

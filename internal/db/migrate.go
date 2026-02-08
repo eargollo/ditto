@@ -36,6 +36,9 @@ func Migrate(db *sql.DB) error {
 	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_files_scan_id ON files(scan_id)"); err != nil {
 		return err
 	}
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_files_scan_id_size ON files(scan_id, size)"); err != nil {
+		return err
+	}
 
 	return nil
 }

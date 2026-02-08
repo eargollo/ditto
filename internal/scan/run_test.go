@@ -3,9 +3,11 @@ package scan
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/eargollo/ditto/internal/db"
 )
@@ -116,5 +118,50 @@ func TestRunScan_nonexistentRootReturnsErrorNoScanRow(t *testing.T) {
 	}
 	if len(scans) != 0 {
 		t.Errorf("expected no scan row, got %d", len(scans))
+	}
+}
+
+func TestRunScan_throttleDisabledIsFast(t *testing.T) {
+	database := runTestDB(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	for i := 0; i < 5; i++ {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%d.txt", i)), []byte("x"), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	start := time.Now()
+	_, err := RunScan(ctx, database, dir, &ScanOptions{MaxFilesPerSecond: 0})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+	// With throttle disabled, 5 files should complete in well under 100ms on any reasonable machine.
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("throttle disabled: elapsed %v, want < 100ms (full speed)", elapsed)
+	}
+}
+
+func TestRunScan_throttleEnabledDelays(t *testing.T) {
+	database := runTestDB(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	for i := 0; i < 3; i++ {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%d.txt", i)), []byte("x"), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	// 10 files/s => 100ms between files. After first file we have 2 waits (before 2nd and 3rd) => at least ~200ms.
+	start := time.Now()
+	_, err := RunScan(ctx, database, dir, &ScanOptions{MaxFilesPerSecond: 10})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+	minElapsed := 150 * time.Millisecond // generous margin
+	if elapsed < minElapsed {
+		t.Errorf("throttle 10/s with 3 files: elapsed %v, want >= %v", elapsed, minElapsed)
 	}
 }
