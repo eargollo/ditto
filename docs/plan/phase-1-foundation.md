@@ -74,14 +74,14 @@
 - Test: insert one row into `scans`, one into `files` (with required columns), then select them back. Ensures columns and types are correct.
 
 **Schema (reference):**
-- **scans:** `id` (primary key, e.g. integer auto), `created_at` (datetime), optional `root_path` (text, nullable for now) if we want it for phase 2.
-- **files:** `id` (primary key), `scan_id` (FK to scans), `path` (text), `size` (integer), `mtime` (integer or datetime), `inode` (integer), `device_id` (integer, optional), `hash` (text, nullable), `hash_status` (text: `pending` / `hashing` / `done` / `failed`). Indexes: `scan_id`, and later we’ll need `(scan_id, size)` and `hash` for duplicate grouping; can add in this step or the next.
+- **scans:** `id` (primary key, e.g. integer auto), `created_at` (datetime), `completed_at` (datetime, nullable — set when the scan run finishes; “last scan date” is at scan level, no per-file update), optional `root_path` (text, nullable for now) for phase 2.
+- **files:** `id` (primary key), `scan_id` (FK to scans), `path` (text), `size` (integer), `mtime` (integer or datetime), `inode` (integer), `device_id` (integer, optional), `hash` (text, nullable), `hash_status` (text: `pending` / `hashing` / `done` / `failed`), `hashed_at` (datetime, nullable — set when we set `hash` and `hash_status = 'done'`; “last hashing date” per file, supports staleness). Indexes: `scan_id`, and later we’ll need `(scan_id, size)` and `hash` for duplicate grouping; can add in this step or the next.
 
 **Deliverables:**
 - Migrations: either a single `Migrate(db *sql.DB) error` that runs `CREATE TABLE IF NOT EXISTS ...` for `scans` and `files`, or a small set of SQL files in `internal/db/migrations/` and a runner. Prefer simple: one function that creates both tables.
 - Enable foreign keys if desired: `PRAGMA foreign_keys = ON` in Open or Migrate.
 
-**Review:** Schema matches ADR-005 (inode, device_id, hash_status); migrations are idempotent; tests prove tables and one insert/select round-trip.
+**Review:** Schema matches ADR-005 (inode, device_id, hash_status); scans have `completed_at` and files have `hashed_at` for staleness without mass updates; migrations are idempotent; tests prove tables and one insert/select round-trip.
 
 ---
 
@@ -96,7 +96,7 @@
 
 **Deliverables:**
 - `internal/db/scans.go` (or `internal/store/scans.go`): `CreateScan(ctx, db, rootPath string) (*Scan, error)`, `GetScan(ctx, db, id int64) (*Scan, error)`, `ListScans(ctx, db) ([]Scan, error)`.
-- `Scan` struct: at least `ID`, `CreatedAt`, `RootPath` (optional for phase 1).
+- `Scan` struct: at least `ID`, `CreatedAt`, `CompletedAt` (nullable), `RootPath` (optional for phase 1).
 
 **Review:** Tests are table-driven if useful; context is passed through; no SQL in tests (use the same DB package).
 
@@ -113,7 +113,7 @@
 
 **Deliverables:**
 - `internal/db/files.go`: `InsertFile(ctx, db, scanID, path, size, mtime, inode, deviceID)` (or a struct for the args), `GetFilesByScanID(ctx, db, scanID) ([]File, error)`.
-- `File` struct: `ID`, `ScanID`, `Path`, `Size`, `MTime`, `Inode`, `DeviceID`, `Hash`, `HashStatus`. Match schema from Step 4.
+- `File` struct: `ID`, `ScanID`, `Path`, `Size`, `MTime`, `Inode`, `DeviceID`, `Hash`, `HashStatus`, `HashedAt` (nullable). Match schema from Step 4.
 
 **Review:** Hash and hash_status defaults are correct; tests cover happy path and empty case.
 
