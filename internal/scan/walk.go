@@ -20,13 +20,21 @@ type Entry struct {
 // Walk traverses root and calls fn for each regular file. Symlinks are not
 // followed and are not yielded (ADR-006). Directories are not yielded.
 // Uses Lstat so symlink targets are never followed.
-func Walk(ctx context.Context, root string, fn func(Entry) error) error {
+// If excludePatterns is non-nil and non-empty, paths matching any pattern are skipped
+// (see ShouldExclude). Excluded directories are not recursed into.
+func Walk(ctx context.Context, root string, excludePatterns []string, fn func(Entry) error) error {
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if ShouldExclude(path, excludePatterns) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() {
 			return nil
