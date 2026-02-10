@@ -26,7 +26,8 @@ type Config struct {
 
 // Load reads configuration from the environment. Defaults are used when
 // DITTO_DATA_DIR or DITTO_PORT are unset or empty. Returns an error if
-// DITTO_PORT is set but invalid (non-numeric or out of range 1-65535).
+// DITTO_PORT is set but invalid (non-numeric or out of range 0-65535).
+// Port 0 means "let the kernel choose an available port" (useful for tests).
 func Load() (*Config, error) {
 	dataDir := os.Getenv(EnvDataDir)
 	if dataDir == "" {
@@ -42,8 +43,8 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, errors.New("DITTO_PORT must be a number")
 	}
-	if port < 1 || port > 65535 {
-		return nil, errors.New("DITTO_PORT must be between 1 and 65535")
+	if port < 0 || port > 65535 {
+		return nil, errors.New("DITTO_PORT must be between 0 and 65535")
 	}
 
 	return &Config{dataDir: dataDir, port: port}, nil

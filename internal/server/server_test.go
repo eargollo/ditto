@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -95,6 +96,9 @@ func TestServer_404ForUnknown(t *testing.T) {
 }
 
 func TestServer_RunContextCancelShutsDown(t *testing.T) {
+	// Port 0 so the server binds to an available port (avoids "address already in use" when 8080 is taken)
+	os.Setenv(config.EnvPort, "0")
+	defer os.Unsetenv(config.EnvPort)
 	cfg, _ := config.Load()
 	database, _ := db.Open(":memory:")
 	defer database.Close()

@@ -19,14 +19,20 @@ const readOnlyBusyTimeoutMS = 5000 // 5 seconds
 
 // Open opens a SQLite database at path and enables WAL mode for better
 // write throughput (ADR-002). The caller must call db.Close() when done.
-// For in-memory DB use path ":memory:".
+// For in-memory DB use path ":memory:". With ":memory:", the URI form
+// file::memory:?cache=shared is used so all connections in the pool share
+// the same database (otherwise each connection gets its own empty DB).
 func Open(path string) (*sql.DB, error) {
-	// _busy_timeout in DSN so every new connection gets it (Exec only runs on one connection).
-	sep := "?"
-	if strings.Contains(path, "?") {
-		sep = "&"
+	dsn := path
+	if path == ":memory:" {
+		dsn = "file::memory:?cache=shared&_busy_timeout=" + strconv.Itoa(busyTimeoutMS)
+	} else {
+		sep := "?"
+		if strings.Contains(path, "?") {
+			sep = "&"
+		}
+		dsn = path + sep + "_busy_timeout=" + strconv.Itoa(busyTimeoutMS)
 	}
-	dsn := path + sep + "_busy_timeout=" + strconv.Itoa(busyTimeoutMS)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
