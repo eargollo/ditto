@@ -20,15 +20,17 @@ type File struct {
 	HashedAt   *time.Time
 }
 
-// InsertFile inserts a file record for the given scan. hash and hashed_at are left null;
-// hash_status is set to "pending". deviceID may be nil.
+// InsertFile inserts or updates a file record for the given scan. At most one row per (scan_id, path);
+// if the path already exists for this scan (e.g. user continued scan multiple times), the row is
+// updated with the new size/mtime/inode/device_id and hash state is left unchanged. deviceID may be nil.
 func InsertFile(ctx context.Context, db *sql.DB, scanID int64, path string, size, mtime, inode int64, deviceID *int64) error {
 	var deviceVal interface{} = nil
 	if deviceID != nil {
 		deviceVal = *deviceID
 	}
 	_, err := db.ExecContext(ctx,
-		"INSERT INTO files (scan_id, path, size, mtime, inode, device_id, hash, hash_status, hashed_at) VALUES (?, ?, ?, ?, ?, ?, NULL, 'pending', NULL)",
+		`INSERT INTO files (scan_id, path, size, mtime, inode, device_id, hash, hash_status, hashed_at) VALUES (?, ?, ?, ?, ?, ?, NULL, 'pending', NULL)
+		 ON CONFLICT(scan_id, path) DO UPDATE SET size=excluded.size, mtime=excluded.mtime, inode=excluded.inode, device_id=excluded.device_id`,
 		scanID, path, size, mtime, inode, deviceVal)
 	return err
 }

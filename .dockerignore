@@ -1,0 +1,11 @@
+.git
+.gitignore
+*.db
+data/
+/ditto
+scan.log
+*.md
+docs/
+mise.toml
+.cursor
+.DS_Store

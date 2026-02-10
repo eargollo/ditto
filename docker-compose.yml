@@ -1,0 +1,26 @@
+# Example docker-compose for Ditto.
+# Adjust image, ports, and volume paths for your environment.
+# On Synology: set PUID/PGID to your user's UID/GID (run "id" via SSH) when using a host mount for /data.
+# Mount your shared folders under /scan so you can add e.g. /scan/Photos as a scan root in the UI.
+
+services:
+  ditto:
+    image: ditto:latest
+    build: .
+    container_name: ditto
+    restart: unless-stopped
+    environment:
+      DITTO_DATA_DIR: /data
+      DITTO_PORT: 8080
+      # PUID: 1000
+      # PGID: 1000
+      # When mounting a host path for /data on Synology, set PUID and PGID to your DSM user (e.g. id admin → PUID=1026 PGID=100)
+    volumes:
+      - ditto-data:/data
+      # Mount folders to scan (paths inside container = scan roots in UI)
+      # - /path/on/host/Photos:/scan/Photos:ro
+    ports:
+      - "8080:8080"
+
+volumes:
+  ditto-data:

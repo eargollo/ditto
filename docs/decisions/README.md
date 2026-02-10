@@ -20,3 +20,4 @@ This folder contains **Architecture Decision Records (ADRs)** for the Ditto proj
 | ADR-005   | Separate scan from hashing with prioritized hash queue   |
 | ADR-006   | SHA-256 hashing and duplicate definition (symlinks, hardlinks) |
 | ADR-007   | Absolute paths and scan as source of freshness and deletion     |
+| ADR-008   | Scan hangs on FUSE/cloud paths and default exclude file         |

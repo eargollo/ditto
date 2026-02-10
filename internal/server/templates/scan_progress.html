@@ -1,0 +1,32 @@
+{{define "scan-progress-content"}}
+<h1 class="text-2xl font-bold text-gray-900">Scan {{.ID}}</h1>
+<p class="text-gray-600 mt-1">Root: {{.RootPath}}</p>
+<div id="scan-status"
+  hx-get="/scans/{{.ID}}/status"
+  hx-trigger="load, every 2s"
+  hx-swap="innerHTML"
+  class="mt-4">
+  <p class="text-gray-500">Loading status…</p>
+</div>
+<p class="mt-4"><a href="/scans" class="text-blue-600 hover:underline">← Back to scans</a></p>
+{{end}}
+
+{{define "scan-status-fragment"}}
+<div class="rounded border border-gray-200 p-4 bg-white">
+  <table class="min-w-full text-sm">
+    <tr><td class="font-medium text-gray-700 pr-4">Created</td><td>{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Completed</td><td>{{if .CompletedAt}}{{.CompletedAt.Format "2006-01-02 15:04:05"}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Files scanned</td><td>{{if .FileCount}}{{.FileCount}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Skipped (scan)</td><td>{{if .ScanSkippedCount}}{{.ScanSkippedCount}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Hash started</td><td>{{if .HashStartedAt}}{{.HashStartedAt.Format "2006-01-02 15:04:05"}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Hash completed</td><td>{{if .HashCompletedAt}}{{.HashCompletedAt.Format "2006-01-02 15:04:05"}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Hashed files</td><td>{{if .HashedFileCount}}{{.HashedFileCount}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Reused hash</td><td>{{if .HashReusedCount}}{{.HashReusedCount}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Skipped (hash)</td><td>{{if .HashErrorCount}}{{.HashErrorCount}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Hashed bytes</td><td>{{if .HashedByteCount}}{{.HashedByteCount}}{{else}}—{{end}}</td></tr>
+  </table>
+  {{if and .CompletedAt .HashCompletedAt}}
+  <p class="mt-2"><a href="/scans/{{.ID}}/duplicates" class="text-blue-600 hover:underline">View duplicates</a></p>
+  {{end}}
+</div>
+{{end}}

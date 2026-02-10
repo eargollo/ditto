@@ -1,0 +1,23 @@
+{{define "layout.html"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ditto</title>
+  <link href="/static/app.css" rel="stylesheet" />
+  <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head>
+<body class="min-h-screen bg-gray-50">
+  <nav class="bg-white shadow">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex gap-4">
+      <a href="/" class="text-lg font-semibold text-gray-800">Ditto</a>
+      <a href="/scans" class="text-gray-600 hover:text-gray-900">Scans</a>
+    </div>
+  </nav>
+  <main class="max-w-7xl mx-auto px-4 py-6">
+    {{.Content}}
+  </main>
+</body>
+</html>
+{{end}}

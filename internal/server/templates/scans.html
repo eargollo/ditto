@@ -1,0 +1,79 @@
+{{define "scans-content"}}
+<h1 class="text-2xl font-bold text-gray-900">Scans</h1>
+
+<section class="mt-6">
+  <h2 class="text-lg font-semibold text-gray-800">Add scan root</h2>
+  <form action="/scans/roots" method="post" class="mt-2 flex gap-2">
+    <input type="text" name="path" placeholder="/path/to/dir" required class="flex-1 rounded border border-gray-300 px-3 py-2" />
+    <button type="submit" class="px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-900">Add</button>
+  </form>
+</section>
+
+<section class="mt-6">
+  <h2 class="text-lg font-semibold text-gray-800">Scan roots</h2>
+  {{if .Roots}}
+  <ul class="mt-2 space-y-2">
+    {{range .Roots}}
+    <li class="flex items-center gap-4 flex-wrap">
+      <span class="text-gray-700">{{.Path}}</span>
+      <form action="/scans/start" method="post" class="inline">
+        <input type="hidden" name="root_id" value="{{.ID}}" />
+        <button type="submit" class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Start scan</button>
+      </form>
+      {{$incID := index $.IncompleteScanIDByRoot .Path}}
+      {{if $incID}}
+      <form action="/scans/{{$incID}}/continue" method="post" class="inline">
+        <button type="submit" class="px-3 py-1 text-sm bg-amber-600 text-white rounded hover:bg-amber-700">Continue last</button>
+      </form>
+      {{end}}
+    </li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="mt-2 text-gray-500">No scan roots. Add one above.</p>
+  {{end}}
+</section>
+
+<section class="mt-8">
+  <h2 class="text-lg font-semibold text-gray-800">Recent scans</h2>
+  {{if .Scans}}
+  <div class="mt-2 overflow-x-auto">
+    <table class="min-w-full border border-gray-200 rounded">
+      <thead class="bg-gray-50">
+        <tr>
+          <th class="text-left px-4 py-2 text-gray-700">ID</th>
+          <th class="text-left px-4 py-2 text-gray-700">Root</th>
+          <th class="text-left px-4 py-2 text-gray-700">Created</th>
+          <th class="text-left px-4 py-2 text-gray-700">Completed</th>
+          <th class="text-left px-4 py-2 text-gray-700">Files</th>
+          <th class="text-left px-4 py-2 text-gray-700">Hash</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Scans}}
+        <tr class="border-t border-gray-200">
+          <td class="px-4 py-2">{{.ID}}</td>
+          <td class="px-4 py-2 text-gray-700">{{.RootPath}}</td>
+          <td class="px-4 py-2 text-gray-600">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+          <td class="px-4 py-2 text-gray-600">{{if .CompletedAt}}{{.CompletedAt.Format "2006-01-02 15:04"}}{{else}}—{{end}}</td>
+          <td class="px-4 py-2 text-gray-600">{{if .FileCount}}{{.FileCount}}{{else}}—{{end}}</td>
+          <td class="px-4 py-2">{{if .HashCompletedAt}}done{{else if .HashStartedAt}}running…{{else}}—{{end}}</td>
+          <td class="px-4 py-2 flex gap-2">
+            <a href="/scans/{{.ID}}" class="text-blue-600 hover:underline">Progress</a>
+            {{if or (not .CompletedAt) (not .HashCompletedAt)}}
+            <form action="/scans/{{.ID}}/continue" method="post" class="inline">
+              <button type="submit" class="text-amber-600 hover:underline text-sm">Continue</button>
+            </form>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p class="mt-2 text-gray-500">No scans yet. Start one from a root above.</p>
+  {{end}}
+</section>
+{{end}}

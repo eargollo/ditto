@@ -98,3 +98,41 @@ func TestListScans_newestFirst(t *testing.T) {
 			scans[0].ID, scans[1].ID, s2.ID, s1.ID)
 	}
 }
+
+func TestGetLatestIncompleteScanForRoot(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	// No scans: returns 0
+	id, err := GetLatestIncompleteScanForRoot(ctx, db, "/any")
+	if err != nil {
+		t.Fatalf("GetLatestIncompleteScanForRoot: %v", err)
+	}
+	if id != 0 {
+		t.Errorf("empty db: got %d, want 0", id)
+	}
+
+	// One incomplete scan for /foo
+	s1, _ := CreateScan(ctx, db, "/foo")
+	id, err = GetLatestIncompleteScanForRoot(ctx, db, "/foo")
+	if err != nil {
+		t.Fatalf("GetLatestIncompleteScanForRoot: %v", err)
+	}
+	if id != s1.ID {
+		t.Errorf("one incomplete: got %d, want %d", id, s1.ID)
+	}
+
+	// Complete s1, then create s2 for same root: returns s2 (latest incomplete)
+	_ = UpdateScanCompletedAt(ctx, db, s1.ID, 0, 0)
+	s2, _ := CreateScan(ctx, db, "/foo")
+	id, _ = GetLatestIncompleteScanForRoot(ctx, db, "/foo")
+	if id != s2.ID {
+		t.Errorf("after complete first: got %d, want %d (latest incomplete)", id, s2.ID)
+	}
+
+	// Different root has no incomplete
+	id, _ = GetLatestIncompleteScanForRoot(ctx, db, "/other")
+	if id != 0 {
+		t.Errorf("other root: got %d, want 0", id)
+	}
+}

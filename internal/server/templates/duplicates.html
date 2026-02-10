@@ -1,0 +1,116 @@
+{{define "duplicates-content"}}
+<h1 class="text-2xl font-bold text-gray-900">Duplicates — Scan {{.ScanID}}</h1>
+<p class="mt-2"><a href="/scans/{{.ScanID}}" class="text-blue-600 hover:underline">← Back to scan</a></p>
+
+<section class="mt-6">
+  <h2 class="text-lg font-semibold text-gray-800">By content (hash)</h2>
+  {{if .ByHash}}
+  <div class="mt-2 overflow-x-auto">
+    <table class="min-w-full border border-gray-200 rounded">
+      <thead class="bg-gray-50">
+        <tr>
+          <th class="text-left px-4 py-2 text-gray-700">Hash</th>
+          <th class="text-left px-4 py-2 text-gray-700">Files</th>
+          <th class="text-left px-4 py-2 text-gray-700">Size</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .ByHash}}
+        <tr class="border-t border-gray-200">
+          <td class="px-4 py-2 font-mono text-sm text-gray-700">{{.Hash}}</td>
+          <td class="px-4 py-2">{{.Count}}</td>
+          <td class="px-4 py-2">{{.Size}}</td>
+          <td class="px-4 py-2"><a href="/scans/{{$.ScanID}}/duplicates/hash/{{.Hash}}" class="text-blue-600 hover:underline">View files</a></td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p class="mt-2 text-gray-500">No duplicate groups by content.</p>
+  {{end}}
+</section>
+
+<section class="mt-8">
+  <h2 class="text-lg font-semibold text-gray-800">By inode (hardlinks)</h2>
+  {{if .ByInode}}
+  <div class="mt-2 overflow-x-auto">
+    <table class="min-w-full border border-gray-200 rounded">
+      <thead class="bg-gray-50">
+        <tr>
+          <th class="text-left px-4 py-2 text-gray-700">Inode</th>
+          <th class="text-left px-4 py-2 text-gray-700">Device</th>
+          <th class="text-left px-4 py-2 text-gray-700">Files</th>
+          <th class="text-left px-4 py-2 text-gray-700">Size</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .ByInode}}
+        <tr class="border-t border-gray-200">
+          <td class="px-4 py-2">{{.Inode}}</td>
+          <td class="px-4 py-2">{{if .DeviceID}}{{.DeviceID}}{{else}}—{{end}}</td>
+          <td class="px-4 py-2">{{.Count}}</td>
+          <td class="px-4 py-2">{{.Size}}</td>
+          <td class="px-4 py-2"><a href="/scans/{{$.ScanID}}/duplicates/inode?inode={{.Inode}}{{if .DeviceID}}&device_id={{.DeviceID}}{{end}}" class="text-blue-600 hover:underline">View files</a></td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p class="mt-2 text-gray-500">No duplicate groups by inode.</p>
+  {{end}}
+</section>
+{{end}}
+
+{{define "duplicate-group-content"}}
+<h1 class="text-2xl font-bold text-gray-900">Duplicate group (hash)</h1>
+<p class="mt-1 font-mono text-sm text-gray-600">{{.Hash}}</p>
+<p class="mt-2">{{if eq .ScanID 0}}<a href="/?scan_id=0" class="text-blue-600 hover:underline">← Back to duplicates (All)</a>{{else}}<a href="/scans/{{.ScanID}}/duplicates" class="text-blue-600 hover:underline">← Back to duplicates</a>{{end}}</p>
+<div class="mt-4 overflow-x-auto">
+  <table class="min-w-full border border-gray-200 rounded">
+    <thead class="bg-gray-50">
+      <tr>
+        <th class="text-left px-4 py-2 text-gray-700">Path</th>
+        {{if .RootPathByScanID}}<th class="text-left px-4 py-2 text-gray-700">Folder</th>{{end}}
+        <th class="text-left px-4 py-2 text-gray-700">Size</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Files}}
+      <tr class="border-t border-gray-200">
+        <td class="px-4 py-2 text-gray-800">{{.Path}}</td>
+        {{if $.RootPathByScanID}}<td class="px-4 py-2 text-gray-600">{{index $.RootPathByScanID .ScanID}}</td>{{end}}
+        <td class="px-4 py-2">{{.Size}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+{{define "duplicate-inode-group-content"}}
+<h1 class="text-2xl font-bold text-gray-900">Duplicate group (inode)</h1>
+<p class="mt-1 text-gray-600">Inode {{.Inode}}{{if .DeviceID}}, device {{.DeviceID}}{{end}}</p>
+<p class="mt-2"><a href="/scans/{{.ScanID}}/duplicates" class="text-blue-600 hover:underline">← Back to duplicates</a></p>
+<div class="mt-4 overflow-x-auto">
+  <table class="min-w-full border border-gray-200 rounded">
+    <thead class="bg-gray-50">
+      <tr>
+        <th class="text-left px-4 py-2 text-gray-700">Path</th>
+        <th class="text-left px-4 py-2 text-gray-700">Size</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Files}}
+      <tr class="border-t border-gray-200">
+        <td class="px-4 py-2 text-gray-800">{{.Path}}</td>
+        <td class="px-4 py-2">{{.Size}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}

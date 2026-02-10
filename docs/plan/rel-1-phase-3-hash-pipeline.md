@@ -112,6 +112,24 @@ We do **not** pass work from scan to hash via in-process channels. The **databas
 
 ---
 
+## Step 4b: Hash-phase metrics on scans (v1)
+
+**What:** Store when hashing started and finished for a scan, and how much work was done (file count and bytes), so we can measure throughput (files/sec, bytes/sec) and tune parallelization. Add columns to the `scans` table; set them in `RunHashPhase`. v1: one set of metrics per scan (last hash run overwrites if we re-run).
+
+**TDD:**
+- Test: after running hash phase for a scan with some duplicate candidates, the scan row has `hash_started_at` and `hash_completed_at` set (completed >= started), `hashed_file_count` equal to the number of files that got `hash_status = 'done'`, and `hashed_byte_count` equal to the sum of `size` of those files.
+- Test: if hash phase is not run for a scan, these columns remain null.
+
+**Deliverables:**
+- Migration: add to `scans` table: `hash_started_at` (TEXT, nullable), `hash_completed_at` (TEXT, nullable), `hashed_file_count` (INTEGER, nullable), `hashed_byte_count` (INTEGER, nullable). Use same datetime format as existing columns (e.g. RFC3339).
+- At the start of `RunHashPhase(scanID)`: set `hash_started_at = now` for that scan (and optionally clear previous completed/counts if re-running).
+- When all workers have finished (just before return): set `hash_completed_at = now`, `hashed_file_count` = count of files with `scan_id = ? AND hash_status = 'done'`, `hashed_byte_count` = sum of `size` for those files. DB helpers: e.g. `UpdateScanHashStartedAt`, `UpdateScanHashCompletedAt(ctx, db, scanID, fileCount, byteCount)` or a single update with all four fields at the end.
+- Extend `Scan` struct and any scan getters to include the new fields (for UI or CLI later).
+
+**Review:** Metrics are set only when hash phase runs; counts match actual hashed files; duration and throughput are derivable from the stored values.
+
+---
+
 ## Step 5: Bounded worker pool
 
 **What:** Run the hash phase with a configurable number of workers (e.g. default 4). Each worker claims jobs from the same queue (same scan_id) until no jobs remain. Claim must be atomic (Step 1) so concurrent workers never receive the same file; each worker does: claim → reuse or HashFile → update.
@@ -150,6 +168,7 @@ We do **not** pass work from scan to hash via in-process channels. The **databas
 - [ ] `go build ./...` and `go test ./...` pass.
 - [ ] Reviewer has approved each step (or each PR).
 - [ ] After a scan, running the hash phase for that scan_id fills in `hash` and `hashed_at` for all duplicate candidates (same-size groups); unique-size files remain pending; hardlinks reuse hash; worker pool and throttle work as configured.
+- [ ] Scan row has hash-phase metrics (hash_started_at, hash_completed_at, hashed_file_count, hashed_byte_count) set after a hash run (Step 4b).
 
 ---
 

@@ -6,10 +6,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/eargollo/ditto/internal/config"
 	"github.com/eargollo/ditto/internal/db"
+	"github.com/eargollo/ditto/internal/hash"
+	"github.com/eargollo/ditto/internal/server"
 	"github.com/eargollo/ditto/internal/scan"
 )
 
@@ -31,6 +35,15 @@ func main() {
 	}
 	defer database.Close()
 
+	// Read-only connection so the UI stays responsive during scans (WAL allows concurrent readers).
+	readDB, err := db.OpenReadOnly(dbPath)
+	if err != nil {
+		log.Fatalf("open read-only db: %v", err)
+	}
+	if readDB != nil {
+		defer readDB.Close()
+	}
+
 	if err := db.Migrate(database); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
@@ -40,15 +53,39 @@ func main() {
 		return
 	}
 
-	log.Print("Migrations OK")
+	srv, err := server.NewServer(cfg, database, readDB)
+	if err != nil {
+		log.Fatalf("server: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
+		cancel()
+	}()
+	log.Printf("Web UI at http://localhost:%d", cfg.Port())
+	if err := srv.Run(ctx); err != nil {
+		log.Fatalf("server: %v", err)
+	}
 }
 
 func runScan(ctx context.Context, database *sql.DB, rootPath string) {
-	scanID, err := scan.RunScan(ctx, database, rootPath, nil)
+	opts, err := scan.OptionsForRoot(rootPath)
+	if err != nil {
+		log.Fatalf("exclude file: %v", err)
+	}
+	scanID, err := scan.RunScan(ctx, database, rootPath, opts)
 	if err != nil {
 		log.Fatalf("scan: %v", err)
 	}
 	log.Printf("Scan complete: id=%d", scanID)
+
+	if err := hash.RunHashPhase(ctx, database, scanID, &hash.HashOptions{Workers: 6}); err != nil {
+		log.Fatalf("hash phase: %v", err)
+	}
+	log.Printf("Hash phase complete for scan %d", scanID)
 
 	// ADR-007: duplicate and current-state queries are scoped to this scan (latest snapshot).
 	rows, err := database.QueryContext(ctx,

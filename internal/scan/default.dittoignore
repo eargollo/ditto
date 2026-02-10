@@ -1,0 +1,6 @@
+# Default patterns always applied (e.g. paths that can hang or are not useful to scan).
+# See .dittoignore in the scan root for user overrides.
+# To find a path that causes a hang: run with DITTO_DEBUG_SCAN=1; the last "listing directory: <path>" in the log is the path to add here (as a path segment, e.g. .shortcut-targets-by-id).
+# Hidden files and directories (base name starting with .); glob matched against base name.
+.*
+.Encrypted
