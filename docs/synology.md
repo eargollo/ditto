@@ -9,14 +9,16 @@ This guide explains how to run Ditto in Synology Container Manager (Docker) so y
 
 ## Pull the image
 
-In Container Manager (or via SSH with `docker pull`):
+The image is published to **GitHub Container Registry**. Use `ghcr.io/eargollo/ditto:latest` or a version tag (e.g. `ghcr.io/eargollo/ditto:v0.1.0`).
 
-1. Open **Registry** and search for the image (e.g. `ditto` or `youruser/ditto`), or add a custom registry URL.
-2. Download the image. Choose the tag that matches your NAS:
+In Container Manager:
+
+1. Open **Registry** → search for `eargollo/ditto` or add the GitHub Container Registry URL if needed.
+2. Download the image. Choose the tag that matches your NAS (the image is multi-platform):
    - **x64 NAS:** `linux/amd64`
    - **ARM NAS (e.g. DS223j, DS224+):** `linux/arm64`
 
-If you build and push the image yourself, use the same image name and tag from your registry.
+Or via SSH: `docker pull ghcr.io/eargollo/ditto:latest`
 
 ## Create the container
 
@@ -86,17 +88,19 @@ Then use **Start scan** for each root. Scans run one at a time; you can queue mu
 
 ## Example with docker-compose
 
-If you use `docker-compose` (e.g. via Container Manager’s Compose support or SSH), you can use this as a template. Adjust image name, tag, ports, and volume paths to match your NAS:
+If you use `docker-compose` (e.g. via Container Manager’s Compose support or SSH), you can use this as a template. Adjust ports and volume paths to match your NAS:
 
 ```yaml
 services:
   ditto:
-    image: YOUR_REGISTRY/ditto:v0.1.0
+    image: ghcr.io/eargollo/ditto:latest
     container_name: ditto
     restart: unless-stopped
     environment:
       DITTO_DATA_DIR: /data
       DITTO_PORT: 8080
+      # PUID: 1026
+      # PGID: 100
     volumes:
       - /volume1/docker/ditto/data:/data
       - /volume1/Photos:/scan/Photos:ro
@@ -106,8 +110,7 @@ services:
 
 Replace:
 
-- `YOUR_REGISTRY/ditto:v0.1.0` with your image and tag.
-- `/volume1/docker/ditto/data` with a path where you want to persist data.
+- `/volume1/docker/ditto/data` with a path where you want to persist data (set `PUID`/`PGID` to your user if needed).
 - `/volume1/Photos` with the host path to the folder you want to scan; use `/scan/Photos` (or similar) as the scan root in the UI.
 
 ## Troubleshooting

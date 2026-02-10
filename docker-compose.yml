@@ -1,12 +1,11 @@
 # Example docker-compose for Ditto.
-# Adjust image, ports, and volume paths for your environment.
+# Uses the image published to GitHub Container Registry. Add "build: ." to build from source instead.
 # On Synology: set PUID/PGID to your user's UID/GID (run "id" via SSH) when using a host mount for /data.
 # Mount your shared folders under /scan so you can add e.g. /scan/Photos as a scan root in the UI.
 
 services:
   ditto:
-    image: ditto:latest
-    build: .
+    image: ghcr.io/eargollo/ditto:latest
     container_name: ditto
     restart: unless-stopped
     environment:

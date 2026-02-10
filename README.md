@@ -20,10 +20,11 @@ DITTO_DATA_DIR=/path/to/data DITTO_PORT=3000 go run ./cmd/ditto
 
 ### Docker
 
+Images are published to [GitHub Container Registry](https://github.com/eargollo/ditto/pkgs/container/ditto). Use the latest release or `latest`:
+
 ```bash
-# Build and run
-docker build -t ditto .
-docker run --rm -v ditto-data:/data -p 8080:8080 ditto
+# Pull and run (use a version tag for production, e.g. ghcr.io/eargollo/ditto:v0.1.0)
+docker run --rm -v ditto-data:/data -p 8080:8080 ghcr.io/eargollo/ditto:latest
 # Web UI at http://localhost:8080
 ```
 
@@ -34,13 +35,15 @@ docker run --rm \
   -v ditto-data:/data \
   -v /path/on/host/Photos:/scan/Photos:ro \
   -p 8080:8080 \
-  ditto
+  ghcr.io/eargollo/ditto:latest
 # In the UI, add scan root: /scan/Photos
 ```
 
+To build from source instead: `docker build -t ditto .` then use the `ditto` image in the commands above.
+
 ### Docker Compose
 
-See [docker-compose.yml](docker-compose.yml). Uncomment and set the volume for the folder(s) you want to scan, then:
+See [docker-compose.yml](docker-compose.yml). Set the image to `ghcr.io/eargollo/ditto:latest` (or a version tag), uncomment and set the volume for the folder(s) you want to scan, then:
 
 ```bash
 docker compose up -d
@@ -52,14 +55,34 @@ docker compose up -d
 2. **Get your user UID/GID** — SSH into the NAS and run `id admin` (or your user). Example: `uid=1026(admin) gid=100(users)` → use `PUID=1026`, `PGID=100`.
 3. **Create a folder** for Ditto data (e.g. `Docker/ditto/data`) in File Station. It will be owned by your user.
 4. **Create a container** in Container Manager:
-   - **Image:** pull or use your built image (e.g. `ditto:latest`).
+   - **Image:** `ghcr.io/eargollo/ditto:latest` (or a version tag like `ghcr.io/eargollo/ditto:v0.1.0`).
    - **Environment:** `DITTO_DATA_DIR=/data`, `DITTO_PORT=8080`, `PUID=<your UID>`, `PGID=<your GID>`.
    - **Volume:** mount your folder → container path `/data` (e.g. `Docker/ditto/data` → `/data`).
    - **Optional — folders to scan:** mount shared folders so they appear inside the container (e.g. `Photos` → `/scan/Photos`). In the UI, add scan root **`/scan/Photos`** (the path inside the container).
    - **Port:** map container port 8080 to a host port (e.g. 8080 or 32480).
 5. **Start the container** and open **`http://<NAS-IP>:<host-port>`** in a browser.
 
-For more detail (permissions, compose example, troubleshooting), see **[Running on Synology](docs/synology.md)**.
+**Compose example (Synology):** use host paths and set `PUID`/`PGID` to your DSM user (from `id admin`). Replace `/volume1/...` with your NAS paths.
+
+```yaml
+services:
+  ditto:
+    image: ghcr.io/eargollo/ditto:latest
+    container_name: ditto
+    restart: unless-stopped
+    environment:
+      DITTO_DATA_DIR: /data
+      DITTO_PORT: 8080
+      PUID: 1026   # your UID from "id admin"
+      PGID: 100    # your GID
+    volumes:
+      - /volume1/docker/ditto/data:/data
+      - /volume1/Photos:/scan/Photos:ro
+    ports:
+      - "8080:8080"
+```
+
+In the UI, add scan root **`/scan/Photos`**. For more detail (permissions, troubleshooting), see **[Running on Synology](docs/synology.md)**.
 
 ## Configuration
 
