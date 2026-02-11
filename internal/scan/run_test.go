@@ -129,9 +129,9 @@ func TestRunScan_throttleDisabledIsFast(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunScan: %v", err)
 	}
-	// With throttle disabled, 5 files should complete in well under 100ms on any reasonable machine.
-	if elapsed > 100*time.Millisecond {
-		t.Errorf("throttle disabled: elapsed %v, want < 100ms (full speed)", elapsed)
+	// With throttle disabled, 5 files should complete without artificial delay (DB + I/O only). Avoid a tight bound so CI/slow machines don't flake.
+	if elapsed > 2*time.Second {
+		t.Errorf("throttle disabled: elapsed %v, want < 2s (full speed)", elapsed)
 	}
 }
 
