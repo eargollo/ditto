@@ -18,7 +18,7 @@ func TestPostgresDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open postgres: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	if err := MigratePostgres(db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

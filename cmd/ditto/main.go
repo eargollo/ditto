@@ -22,7 +22,7 @@ func main() {
 	}
 
 	dataDir := cfg.DataDir()
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0750); err != nil {
 		log.Fatalf("create data dir %q: %v", dataDir, err)
 	}
 
@@ -42,7 +42,7 @@ func main() {
 	}
 
 	// Single DB; Postgres handles concurrent readers and writers.
-	srv, err := server.NewServer(cfg, database, nil)
+	srv, err := server.NewServer(cfg, database)
 	if err != nil {
 		log.Fatalf("server: %v", err)
 	}

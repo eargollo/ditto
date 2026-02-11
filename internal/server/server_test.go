@@ -21,7 +21,7 @@ func testServer(t *testing.T) (*Server, *sql.DB) {
 	if err != nil {
 		t.Fatalf("config (set DATABASE_URL): %v", err)
 	}
-	srv, err := NewServer(cfg, database, nil)
+	srv, err := NewServer(cfg, database)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestServer_RunContextCancelShutsDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config: %v", err)
 	}
-	srv, err := NewServer(cfg, database, nil)
+	srv, err := NewServer(cfg, database)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}

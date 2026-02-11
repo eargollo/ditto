@@ -52,11 +52,11 @@ func duplicateGroupsByHash(ctx context.Context, database *sql.DB, scanID int64, 
 		  ORDER BY SUM(f.size) DESC`
 	args := []interface{}{scanID}
 	if limit > 0 {
-		q += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		q += fmt.Sprintf(" LIMIT $%d", len(args)+1) // #nosec G202 -- placeholder index only, args passed separately
 		args = append(args, limit)
 	}
 	if offset > 0 {
-		q += fmt.Sprintf(" OFFSET $%d", len(args)+1)
+		q += fmt.Sprintf(" OFFSET $%d", len(args)+1) // #nosec G202 -- placeholder index only, args passed separately
 		args = append(args, offset)
 	}
 	rows, err := database.QueryContext(ctx, q, args...)
@@ -103,14 +103,14 @@ func DuplicateGroupsByHashPaginatedAcrossScans(ctx context.Context, database *sq
 		  JOIN file_scan fs ON f.id = fs.file_id
 		  WHERE fs.scan_id IN (` + ph + `) AND f.hash_status = 'done'
 		  GROUP BY f.hash HAVING COUNT(*) > 1
-		  ORDER BY SUM(f.size) DESC`
+		  ORDER BY SUM(f.size) DESC` // #nosec G202 -- ph is placeholder count; args passed separately
 	args := idSlice(scanIDs)
 	if limit > 0 {
-		q += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		q += fmt.Sprintf(" LIMIT $%d", len(args)+1) // #nosec G202 -- placeholder index only
 		args = append(args, limit)
 	}
 	if offset > 0 {
-		q += fmt.Sprintf(" OFFSET $%d", len(args)+1)
+		q += fmt.Sprintf(" OFFSET $%d", len(args)+1) // #nosec G202 -- placeholder index only
 		args = append(args, offset)
 	}
 	rows, err := database.QueryContext(ctx, q, args...)
@@ -137,11 +137,11 @@ func FilesInHashGroupLimitAcrossScans(ctx context.Context, database *sql.DB, sca
 	ph := placeholders(len(scanIDs), 1)
 	q := `SELECT f.id, fs.scan_id, (fo.path || '/' || f.path), f.size, f.mtime, f.inode, f.device_id, f.hash, f.hash_status, f.hashed_at
 		  FROM files f JOIN file_scan fs ON f.id = fs.file_id JOIN folders fo ON f.folder_id = fo.id
-		  WHERE fs.scan_id IN (` + ph + `) AND f.hash_status = 'done' AND f.hash = $` + fmt.Sprint(len(scanIDs)+1) + ` ORDER BY fs.scan_id, f.path`
+		  WHERE fs.scan_id IN (` + ph + `) AND f.hash_status = 'done' AND f.hash = $` + fmt.Sprint(len(scanIDs)+1) + ` ORDER BY fs.scan_id, f.path` // #nosec G202 -- ph and placeholder index; args passed separately
 	args := idSlice(scanIDs)
 	args = append(args, hash)
 	if limit > 0 {
-		q += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		q += fmt.Sprintf(" LIMIT $%d", len(args)+1) // #nosec G202 -- placeholder index only
 		args = append(args, limit)
 	}
 	rows, err := database.QueryContext(ctx, q, args...)
@@ -226,7 +226,7 @@ func filesInHashGroup(ctx context.Context, database *sql.DB, scanID int64, hash 
 		  WHERE fs.scan_id = $1 AND f.hash_status = 'done' AND f.hash = $2 ORDER BY f.path`
 	args := []interface{}{scanID, hash}
 	if limit > 0 {
-		q += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		q += fmt.Sprintf(" LIMIT $%d", len(args)+1) // #nosec G202 -- placeholder index only
 		args = append(args, limit)
 	}
 	rows, err := database.QueryContext(ctx, q, args...)

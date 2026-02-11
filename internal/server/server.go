@@ -30,15 +30,14 @@ const scanQueueCap = 64
 
 type Server struct {
 	cfg       *config.Config
-	db        *sql.DB // read-write (scan, hash, mutations)
-	readDB    *sql.DB // optional read-only pool; when set, use for read-heavy handlers so they don't block on writers
+	db        *sql.DB
 	mux       *http.ServeMux
 	tmpl      *template.Template
 	scanQueue chan int64 // scan IDs to process; one worker runs them serially
 }
 
-// NewServer creates a server. readDB is optional: if non-nil, read-only handlers use it so the UI stays responsive during scans (WAL allows concurrent readers).
-func NewServer(cfg *config.Config, database *sql.DB, readDB *sql.DB) (*Server, error) {
+// NewServer creates a server using the given config and database.
+func NewServer(cfg *config.Config, database *sql.DB) (*Server, error) {
 	fm := template.FuncMap{
 		"formatBytes": formatBytes,
 	}
@@ -46,18 +45,12 @@ func NewServer(cfg *config.Config, database *sql.DB, readDB *sql.DB) (*Server, e
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, db: database, readDB: readDB, mux: http.NewServeMux(), tmpl: tmpl, scanQueue: make(chan int64, scanQueueCap)}
+	s := &Server{cfg: cfg, db: database, mux: http.NewServeMux(), tmpl: tmpl, scanQueue: make(chan int64, scanQueueCap)}
 	s.routes()
 	return s, nil
 }
 
-// dbForRead returns the DB to use for read-only queries (readDB if set, else db).
-func (s *Server) dbForRead() *sql.DB {
-	if s.readDB != nil {
-		return s.readDB
-	}
-	return s.db
-}
+func (s *Server) dbForRead() *sql.DB { return s.db }
 
 func formatBytes(n int64) string {
 	const unit = 1024
@@ -111,7 +104,7 @@ func (s *Server) renderPage(w http.ResponseWriter, layoutName, contentName strin
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	page := pageData{Content: template.HTML(contentBuf.Bytes()), Data: data}
+	page := pageData{Content: template.HTML(contentBuf.Bytes()), Data: data} // #nosec G203 -- content from our own templates, not user input
 	var layoutBuf bytes.Buffer
 	if err := s.tmpl.ExecuteTemplate(&layoutBuf, layoutName, page); err != nil {
 		log.Printf("error: render page layout %q: %v", layoutName, err)
@@ -119,7 +112,7 @@ func (s *Server) renderPage(w http.ResponseWriter, layoutName, contentName strin
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(layoutBuf.Bytes())
+	_, _ = w.Write(layoutBuf.Bytes())
 }
 
 const homePageSize = 20
@@ -442,7 +435,7 @@ func (s *Server) handleScanStatus() http.HandlerFunc {
 		sn, err := db.GetScan(r.Context(), s.dbForRead(), scanID)
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte("<p>Scan not found.</p>"))
+			_, _ = w.Write([]byte("<p>Scan not found.</p>"))
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -452,7 +445,7 @@ func (s *Server) handleScanStatus() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		w.Write(buf.Bytes())
+		_, _ = w.Write(buf.Bytes())
 	}
 }
 
@@ -594,7 +587,7 @@ func (s *Server) handleScanRootsList() http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(roots)
+		_ = json.NewEncoder(w).Encode(roots)
 	}
 }
 
@@ -627,7 +620,7 @@ func (s *Server) handleScanRootsAdd() http.HandlerFunc {
 func (s *Server) handleFragment() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte("<p class=\"text-gray-600\">Loaded via HTMX.</p>"))
+		_, _ = w.Write([]byte("<p class=\"text-gray-600\">Loaded via HTMX.</p>"))
 	}
 }
 
@@ -636,12 +629,12 @@ func (s *Server) handleHealth() http.HandlerFunc {
 		if s.db != nil {
 			if err := s.db.PingContext(r.Context()); err != nil {
 				w.WriteHeader(http.StatusServiceUnavailable)
-				w.Write([]byte("db unhealthy"))
+				_, _ = w.Write([]byte("db unhealthy"))
 				return
 			}
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}
 }
 
@@ -649,7 +642,7 @@ func (s *Server) handle404() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte("<html><body><h1>Not Found</h1></body></html>"))
+		_, _ = w.Write([]byte("<html><body><h1>Not Found</h1></body></html>"))
 	}
 }
 

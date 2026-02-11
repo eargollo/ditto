@@ -35,7 +35,7 @@ func parsePatternsFromContent(content string) []string {
 // Lines starting with # are comments and skipped. Leading/trailing whitespace is trimmed.
 // If the file does not exist, returns nil, nil. On read error returns nil, err.
 func LoadExcludeFile(path string) ([]string, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path from config; operator-controlled
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
