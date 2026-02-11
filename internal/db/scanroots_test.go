@@ -8,14 +8,7 @@ import (
 
 func TestAddScanRoot_and_ListScanRoots(t *testing.T) {
 	ctx := context.Background()
-	db, err := Open(":memory:")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer db.Close()
-	if err := Migrate(db); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
+	db := TestPostgresDB(t)
 
 	id1, err := AddScanRoot(ctx, db, "/tmp/foo")
 	if err != nil {
@@ -33,7 +26,7 @@ func TestAddScanRoot_and_ListScanRoots(t *testing.T) {
 		t.Fatalf("ListScanRoots len = %d, want 1", len(roots))
 	}
 	if roots[0].ID != id1 || roots[0].Path != "/tmp/foo" {
-		t.Errorf("ListScanRoots[0] = %+v, want id=%d path=/tmp/foo", roots[0], id1)
+		t.Errorf("ListScanRoots[0] = %+v", roots[0])
 	}
 
 	id2, err := AddScanRoot(ctx, db, "/tmp/bar")
@@ -48,15 +41,13 @@ func TestAddScanRoot_and_ListScanRoots(t *testing.T) {
 		t.Fatalf("ListScanRoots len = %d, want 2", len(roots))
 	}
 	if roots[0].ID != id1 || roots[1].ID != id2 {
-		t.Errorf("ListScanRoots order: got [%d, %d], want [%d, %d]", roots[0].ID, roots[1].ID, id1, id2)
+		t.Errorf("ListScanRoots order: got [%d, %d]", roots[0].ID, roots[1].ID)
 	}
 }
 
 func TestGetScanRoot(t *testing.T) {
 	ctx := context.Background()
-	db, _ := Open(":memory:")
-	defer db.Close()
-	_ = Migrate(db)
+	db := TestPostgresDB(t)
 
 	id, _ := AddScanRoot(ctx, db, "/home/user")
 	got, err := GetScanRoot(ctx, db, id)
@@ -64,7 +55,7 @@ func TestGetScanRoot(t *testing.T) {
 		t.Fatalf("GetScanRoot: %v", err)
 	}
 	if got.ID != id || got.Path != "/home/user" {
-		t.Errorf("GetScanRoot = %+v, want id=%d path=/home/user", got, id)
+		t.Errorf("GetScanRoot = %+v", got)
 	}
 
 	_, err = GetScanRoot(ctx, db, 99999)
@@ -75,9 +66,7 @@ func TestGetScanRoot(t *testing.T) {
 
 func TestDeleteScanRoot(t *testing.T) {
 	ctx := context.Background()
-	db, _ := Open(":memory:")
-	defer db.Close()
-	_ = Migrate(db)
+	db := TestPostgresDB(t)
 
 	id, _ := AddScanRoot(ctx, db, "/x")
 	ok, err := DeleteScanRoot(ctx, db, id)

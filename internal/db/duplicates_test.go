@@ -8,17 +8,18 @@ import (
 
 func TestDuplicateGroupsByHash_and_FilesInHashGroup(t *testing.T) {
 	ctx := context.Background()
-	db, _ := Open(":memory:")
-	defer db.Close()
-	_ = Migrate(db)
+	db := TestPostgresDB(t)
 
-	scan, _ := CreateScan(ctx, db, "/tmp")
-	_ = InsertFile(ctx, db, scan.ID, "/tmp/a", 100, 0, 1, nil)
-	_ = InsertFile(ctx, db, scan.ID, "/tmp/b", 100, 0, 2, nil)
+	folderID, _ := AddFolder(ctx, db, "/tmp")
+	scan, _ := CreateScan(ctx, db, folderID)
+	fileID1, _ := UpsertFile(ctx, db, folderID, "a", 100, 0, 1, nil)
+	InsertFileScan(ctx, db, fileID1, scan.ID)
+	fileID2, _ := UpsertFile(ctx, db, folderID, "b", 100, 0, 2, nil)
+	InsertFileScan(ctx, db, fileID2, scan.ID)
 	hash := "abc123"
 	now := time.Now().UTC()
-	_ = UpdateFileHash(ctx, db, 1, hash, now)
-	_ = UpdateFileHash(ctx, db, 2, hash, now)
+	_ = UpdateFileHash(ctx, db, fileID1, hash, now)
+	_ = UpdateFileHash(ctx, db, fileID2, hash, now)
 
 	groups, err := DuplicateGroupsByHash(ctx, db, scan.ID)
 	if err != nil {
@@ -42,20 +43,27 @@ func TestDuplicateGroupsByHash_and_FilesInHashGroup(t *testing.T) {
 
 func TestDuplicateGroupsByHashAcrossScans(t *testing.T) {
 	ctx := context.Background()
-	db, _ := Open(":memory:")
-	defer db.Close()
-	_ = Migrate(db)
+	db := TestPostgresDB(t)
 
-	scan1, _ := CreateScan(ctx, db, "/folder1")
-	scan2, _ := CreateScan(ctx, db, "/folder2")
+	folder1ID, _ := AddFolder(ctx, db, "/folder1")
+	folder2ID, _ := AddFolder(ctx, db, "/folder2")
+	scan1, _ := CreateScan(ctx, db, folder1ID)
+	scan2, _ := CreateScan(ctx, db, folder2ID)
 	hash := "xyz"
 	now := time.Now().UTC()
-	_ = InsertFile(ctx, db, scan1.ID, "/folder1/a", 50, 0, 1, nil)
-	_ = InsertFile(ctx, db, scan1.ID, "/folder1/b", 50, 0, 2, nil)
-	_ = InsertFile(ctx, db, scan2.ID, "/folder2/c", 50, 0, 3, nil)
-	_ = InsertFile(ctx, db, scan2.ID, "/folder2/d", 50, 0, 4, nil)
-	for _, id := range []int64{1, 2, 3, 4} {
-		_ = UpdateFileHash(ctx, db, id, hash, now)
+	for _, pair := range []struct{ folderID int64; path string; size int64; inode int64 }{
+		{folder1ID, "a", 50, 1},
+		{folder1ID, "b", 50, 2},
+		{folder2ID, "c", 50, 3},
+		{folder2ID, "d", 50, 4},
+	} {
+		fileID, _ := UpsertFile(ctx, db, pair.folderID, pair.path, pair.size, 0, pair.inode, nil)
+		if pair.folderID == folder1ID {
+			InsertFileScan(ctx, db, fileID, scan1.ID)
+		} else {
+			InsertFileScan(ctx, db, fileID, scan2.ID)
+		}
+		_ = UpdateFileHash(ctx, db, fileID, hash, now)
 	}
 
 	scanIDs := []int64{scan1.ID, scan2.ID}
@@ -80,7 +88,6 @@ func TestDuplicateGroupsByHashAcrossScans(t *testing.T) {
 	if len(files) != 4 {
 		t.Errorf("len(files) = %d, want 4", len(files))
 	}
-	// Empty scanIDs returns 0 / nil
 	n0, _ := DuplicateGroupsByHashCountAcrossScans(ctx, db, nil)
 	if n0 != 0 {
 		t.Errorf("count with nil = %d, want 0", n0)

@@ -10,7 +10,7 @@ import (
 // HashFile reads the file at path and returns its SHA-256 hash as a hex-encoded string.
 // The file is streamed (io.Copy) so large files are handled without loading into memory.
 func HashFile(path string) (string, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path from our filesystem walk, not user input
 	if err != nil {
 		return "", err
 	}

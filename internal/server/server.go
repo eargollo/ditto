@@ -30,15 +30,14 @@ const scanQueueCap = 64
 
 type Server struct {
 	cfg       *config.Config
-	db        *sql.DB  // read-write (scan, hash, mutations)
-	readDB    *sql.DB  // optional read-only pool; when set, use for read-heavy handlers so they don't block on writers
+	db        *sql.DB
 	mux       *http.ServeMux
 	tmpl      *template.Template
 	scanQueue chan int64 // scan IDs to process; one worker runs them serially
 }
 
-// NewServer creates a server. readDB is optional: if non-nil, read-only handlers use it so the UI stays responsive during scans (WAL allows concurrent readers).
-func NewServer(cfg *config.Config, database *sql.DB, readDB *sql.DB) (*Server, error) {
+// NewServer creates a server using the given config and database.
+func NewServer(cfg *config.Config, database *sql.DB) (*Server, error) {
 	fm := template.FuncMap{
 		"formatBytes": formatBytes,
 	}
@@ -46,18 +45,12 @@ func NewServer(cfg *config.Config, database *sql.DB, readDB *sql.DB) (*Server, e
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, db: database, readDB: readDB, mux: http.NewServeMux(), tmpl: tmpl, scanQueue: make(chan int64, scanQueueCap)}
+	s := &Server{cfg: cfg, db: database, mux: http.NewServeMux(), tmpl: tmpl, scanQueue: make(chan int64, scanQueueCap)}
 	s.routes()
 	return s, nil
 }
 
-// dbForRead returns the DB to use for read-only queries (readDB if set, else db).
-func (s *Server) dbForRead() *sql.DB {
-	if s.readDB != nil {
-		return s.readDB
-	}
-	return s.db
-}
+func (s *Server) dbForRead() *sql.DB { return s.db }
 
 func formatBytes(n int64) string {
 	const unit = 1024
@@ -105,52 +98,57 @@ type pageData struct {
 }
 
 func (s *Server) renderPage(w http.ResponseWriter, layoutName, contentName string, data interface{}) {
-	var buf bytes.Buffer
-	if err := s.tmpl.ExecuteTemplate(&buf, contentName, data); err != nil {
+	var contentBuf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&contentBuf, contentName, data); err != nil {
+		log.Printf("error: render page content %q: %v", contentName, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	page := pageData{Content: template.HTML(buf.Bytes()), Data: data}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tmpl.ExecuteTemplate(w, layoutName, page); err != nil {
+	page := pageData{Content: template.HTML(contentBuf.Bytes()), Data: data} // #nosec G203 -- content from our own templates, not user input
+	var layoutBuf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&layoutBuf, layoutName, page); err != nil {
+		log.Printf("error: render page layout %q: %v", layoutName, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(layoutBuf.Bytes())
 }
 
 const homePageSize = 20
 const maxScansForRoots = 100
 const homeMaxPathsPerGroup = 50 // limit paths loaded per group so home page stays fast
-const homeListScansLimit = 300 // recent scans for dropdown (avoids loading huge scan table)
+const homeListScansLimit = 300  // recent scans for dropdown (avoids loading huge scan table)
 
 // ScanRootChoice is a root path with its latest scan id for the home dropdown.
 type ScanRootChoice struct {
-	RootPath   string
-	ScanID     int64
-	CreatedAt  time.Time
+	RootPath  string
+	ScanID    int64
+	CreatedAt time.Time
 }
 
 // GroupWithPaths is a duplicate group plus the file paths in it (for landing page).
 type GroupWithPaths struct {
-	Hash            string
-	Count           int64
-	Size            int64   // total group size (sum of file sizes)
-	PerFileSize     int64   // size of each file (Size/Count) for human-readable "X MB each"
-	Paths           []string
-	PathsTruncated  bool    // true when only first N paths loaded for performance
+	Hash           string
+	Count          int64
+	Size           int64 // total group size (sum of file sizes)
+	PerFileSize    int64 // size of each file (Size/Count) for human-readable "X MB each"
+	Paths          []string
+	PathsTruncated bool // true when only first N paths loaded for performance
 }
 
 // HomePageData is passed to the home template.
 type HomePageData struct {
-	Roots        []ScanRootChoice  // unique roots (latest scan per root) for dropdown
-	SelectedScan int64             // scan id currently shown
-	SelectedRoot string            // root path label
-	Groups       []GroupWithPaths  // duplicate groups with file paths
-	Page         int               // 1-based
+	Roots        []ScanRootChoice // unique roots (latest scan per root) for dropdown
+	SelectedScan int64            // scan id currently shown
+	SelectedRoot string           // root path label
+	Groups       []GroupWithPaths // duplicate groups with file paths
+	Page         int              // 1-based
 	PageSize     int
 	TotalGroups  int64
 	TotalPages   int
-	PrevPage     int               // 0 if no prev
-	NextPage     int               // 0 if no next
+	PrevPage     int // 0 if no prev
+	NextPage     int // 0 if no next
 }
 
 func (s *Server) handleHome() http.HandlerFunc {
@@ -162,6 +160,7 @@ func (s *Server) handleHome() http.HandlerFunc {
 		ctx := r.Context()
 		scans, err := db.ListScansRecent(ctx, s.dbForRead(), homeListScansLimit)
 		if err != nil {
+			log.Printf("error: home list scans: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -293,7 +292,7 @@ func (s *Server) handleScans() http.HandlerFunc {
 		roots, _ := db.ListScanRoots(ctx, s.dbForRead())
 		byRoot := make(map[string]int64)
 		for _, root := range roots {
-			id, _ := db.GetLatestIncompleteScanForRoot(ctx, s.dbForRead(), root.Path)
+			id, _ := db.GetLatestIncompleteScanForFolder(ctx, s.dbForRead(), root.ID)
 			if id > 0 {
 				byRoot[root.Path] = id
 			}
@@ -313,15 +312,17 @@ func (s *Server) handleScansStart() http.HandlerFunc {
 			return
 		}
 		path := strings.TrimSpace(r.FormValue("root_path"))
+		var folderID int64
 		if path == "" {
 			rootIDStr := r.FormValue("root_id")
 			if rootIDStr != "" {
-				rootID, err := strconv.ParseInt(rootIDStr, 10, 64)
+				var err error
+				folderID, err = strconv.ParseInt(rootIDStr, 10, 64)
 				if err != nil {
 					http.Error(w, "invalid root_id", http.StatusBadRequest)
 					return
 				}
-				root, err := db.GetScanRoot(r.Context(), s.db, rootID)
+				root, err := db.GetScanRoot(r.Context(), s.db, folderID)
 				if err != nil {
 					http.Error(w, "root not found", http.StatusNotFound)
 					return
@@ -333,8 +334,18 @@ func (s *Server) handleScansStart() http.HandlerFunc {
 			http.Error(w, "root_path or root_id required", http.StatusBadRequest)
 			return
 		}
-		scanRow, err := db.CreateScan(r.Context(), s.db, path)
+		if folderID == 0 {
+			var err error
+			folderID, err = db.GetOrCreateFolderByPath(r.Context(), s.db, path)
+			if err != nil {
+				log.Printf("error: get or create folder: %v", err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		scanRow, err := db.CreateScan(r.Context(), s.db, folderID)
 		if err != nil {
+			log.Printf("error: create scan: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -373,6 +384,7 @@ func (s *Server) handleScanContinue() http.HandlerFunc {
 		}
 		// Return any files stuck in 'hashing' (from a cancelled run) to the queue so they get retried.
 		if err := db.ResetHashStatusHashingToPending(r.Context(), s.db, scanID); err != nil {
+			log.Printf("error: reset hash status for scan %d: %v", scanID, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -423,13 +435,17 @@ func (s *Server) handleScanStatus() http.HandlerFunc {
 		sn, err := db.GetScan(r.Context(), s.dbForRead(), scanID)
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte("<p>Scan not found.</p>"))
+			_, _ = w.Write([]byte("<p>Scan not found.</p>"))
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := s.tmpl.ExecuteTemplate(w, "scan-status-fragment", sn); err != nil {
+		var buf bytes.Buffer
+		if err := s.tmpl.ExecuteTemplate(&buf, "scan-status-fragment", sn); err != nil {
+			log.Printf("error: scan status fragment: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
+		_, _ = w.Write(buf.Bytes())
 	}
 }
 
@@ -447,16 +463,17 @@ type hashGroupData struct {
 }
 
 type inodeGroupData struct {
-	ScanID  int64
-	Inode   int64
+	ScanID   int64
+	Inode    int64
 	DeviceID *int64
-	Files   []db.File
+	Files    []db.File
 }
 
 func (s *Server) handleDuplicates() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scanID, err := parseScanID(r.PathValue("id"))
 		if err != nil {
+			log.Printf("error: duplicates parse scan id %q: %v", r.PathValue("id"), err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -474,6 +491,7 @@ func (s *Server) handleDuplicateHashGroup() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scanID, err := parseScanID(r.PathValue("id"))
 		if err != nil {
+			log.Printf("error: duplicate hash group parse scan id %q: %v", r.PathValue("id"), err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -512,6 +530,7 @@ func (s *Server) handleDuplicateHashGroup() http.HandlerFunc {
 		}
 		files, err := db.FilesInHashGroup(r.Context(), database, scanID, hash)
 		if err != nil {
+			log.Printf("error: files in hash group scan=%d hash=%s: %v", scanID, hash, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -523,6 +542,7 @@ func (s *Server) handleDuplicateInodeGroup() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scanID, err := parseScanID(r.PathValue("id"))
 		if err != nil {
+			log.Printf("error: duplicate inode group parse scan id %q: %v", r.PathValue("id"), err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -546,6 +566,7 @@ func (s *Server) handleDuplicateInodeGroup() http.HandlerFunc {
 		}
 		files, err := db.FilesInInodeGroup(r.Context(), s.dbForRead(), scanID, inode, deviceID)
 		if err != nil {
+			log.Printf("error: files in inode group scan=%d: %v", scanID, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -561,11 +582,12 @@ func (s *Server) handleScanRootsList() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		roots, err := db.ListScanRoots(r.Context(), s.dbForRead())
 		if err != nil {
+			log.Printf("error: list scan roots: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(roots)
+		_ = json.NewEncoder(w).Encode(roots)
 	}
 }
 
@@ -576,6 +598,7 @@ func (s *Server) handleScanRootsAdd() http.HandlerFunc {
 			return
 		}
 		if err := r.ParseForm(); err != nil {
+			log.Printf("error: parse form (scan roots add): %v", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -586,6 +609,7 @@ func (s *Server) handleScanRootsAdd() http.HandlerFunc {
 		}
 		_, err := db.AddScanRoot(r.Context(), s.db, path)
 		if err != nil {
+			log.Printf("error: add scan root %q: %v", path, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -596,7 +620,7 @@ func (s *Server) handleScanRootsAdd() http.HandlerFunc {
 func (s *Server) handleFragment() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte("<p class=\"text-gray-600\">Loaded via HTMX.</p>"))
+		_, _ = w.Write([]byte("<p class=\"text-gray-600\">Loaded via HTMX.</p>"))
 	}
 }
 
@@ -605,12 +629,12 @@ func (s *Server) handleHealth() http.HandlerFunc {
 		if s.db != nil {
 			if err := s.db.PingContext(r.Context()); err != nil {
 				w.WriteHeader(http.StatusServiceUnavailable)
-				w.Write([]byte("db unhealthy"))
+				_, _ = w.Write([]byte("db unhealthy"))
 				return
 			}
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}
 }
 
@@ -618,7 +642,7 @@ func (s *Server) handle404() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte("<html><body><h1>Not Found</h1></body></html>"))
+		_, _ = w.Write([]byte("<html><body><h1>Not Found</h1></body></html>"))
 	}
 }
 
@@ -674,7 +698,7 @@ func (s *Server) runOneScan(ctx context.Context, scanID int64) {
 	opts, _ := scan.OptionsForRoot(path)
 	log.Printf("[scan] started for scan %d path %s", scanID, path)
 	if sn.CompletedAt == nil {
-		if err := scan.RunScanForExisting(ctx, s.db, scanID, path, opts); err != nil {
+		if err := scan.RunScanForExisting(ctx, s.db, scanID, sn.FolderID, path, opts); err != nil {
 			log.Printf("[scan] failed for scan %d: %v", scanID, err)
 			return
 		}

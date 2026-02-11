@@ -4,6 +4,7 @@ import (
 	"context"
 	"io/fs"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,7 +138,27 @@ func inodeAndDev(info os.FileInfo) (inode, dev int64) {
 		return 0, 0
 	}
 	if st, ok := sys.(*syscall.Stat_t); ok {
-		return int64(st.Ino), int64(st.Dev)
+		return statTToInt64(any(st.Ino)), statTToInt64(any(st.Dev))
 	}
 	return 0, 0
+}
+
+// statTToInt64 converts Stat_t Ino/Dev to int64 without overflow (type varies by OS: uint64, int32, etc.).
+func statTToInt64(v interface{}) int64 {
+	switch x := v.(type) {
+	case uint64:
+		if x > math.MaxInt64 {
+			return 0
+		}
+		return int64(x)
+	case int32:
+		return int64(x)
+	case uint32:
+		if x > math.MaxInt32 {
+			return 0
+		}
+		return int64(x)
+	default:
+		return 0
+	}
 }

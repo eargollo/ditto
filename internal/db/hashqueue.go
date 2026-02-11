@@ -3,36 +3,34 @@ package db
 import (
 	"context"
 	"database/sql"
-	"time"
 )
 
-const claimRetryAttempts = 8
-const claimRetryBackoff = 100 * time.Millisecond
-
-// CountHashCandidates returns the number of files in this scan that are hash candidates
-// (in a same-size group). One cheap read at hash phase start for progress logging.
+// CountHashCandidates returns the number of files in this scan that are hash candidates (in a same-size group).
 func CountHashCandidates(ctx context.Context, db *sql.DB, scanID int64) (int64, error) {
 	var n int64
 	err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM files
-		WHERE scan_id = ? AND hash_status = 'pending' AND size IN (
-			SELECT size FROM files WHERE scan_id = ? GROUP BY size HAVING COUNT(*) > 1
+		SELECT COUNT(*) FROM files f
+		JOIN file_scan fs ON f.id = fs.file_id
+		WHERE fs.scan_id = $1 AND f.hash_status = 'pending' AND f.size IN (
+			SELECT f2.size FROM files f2 JOIN file_scan fs2 ON f2.id = fs2.file_id
+			WHERE fs2.scan_id = $2 GROUP BY f2.size HAVING COUNT(*) > 1
 		)`, scanID, scanID).Scan(&n)
 	return n, err
 }
 
 const pendingHashJobsQuery = `
-	SELECT id, scan_id, path, size, mtime, inode, device_id, hash, hash_status, hashed_at
-	FROM files
-	WHERE scan_id = ? AND hash_status = 'pending'
-	AND size IN (
-		SELECT size FROM files WHERE scan_id = ? GROUP BY size HAVING COUNT(*) > 1
+	SELECT f.id, $2::bigint, (fo.path || '/' || f.path), f.size, f.mtime, f.inode, f.device_id, f.hash, f.hash_status, f.hashed_at
+	FROM files f
+	JOIN file_scan fs ON f.id = fs.file_id
+	JOIN folders fo ON f.folder_id = fo.id
+	WHERE fs.scan_id = $1 AND f.hash_status = 'pending'
+	AND f.size IN (
+		SELECT f2.size FROM files f2 JOIN file_scan fs2 ON f2.id = fs2.file_id
+		WHERE fs2.scan_id = $1 GROUP BY f2.size HAVING COUNT(*) > 1
 	)
-	ORDER BY size DESC`
+	ORDER BY f.size DESC`
 
-// ForEachPendingHashJob runs one query to stream all pending hash jobs for the scan
-// (same set as CountHashCandidates), ordered by size DESC. For each row it calls fn.
-// Use from a single producer goroutine; no per-file claim, so no lock contention on claim.
+// ForEachPendingHashJob runs one query to stream all pending hash jobs for the scan. For each row it calls fn.
 func ForEachPendingHashJob(ctx context.Context, database *sql.DB, scanID int64, fn func(*File) error) error {
 	rows, err := database.QueryContext(ctx, pendingHashJobsQuery, scanID, scanID)
 	if err != nil {
@@ -63,56 +61,40 @@ func ForEachPendingHashJob(ctx context.Context, database *sql.DB, scanID int64, 
 	return rows.Err()
 }
 
-// ClaimNextHashJob atomically claims the next pending hash job for the given scan.
-// Only files in a same-size group (size shared by at least two files) are candidates.
-// Priority is by size descending (largest first). To add "size × count" priority
-// (prioritize groups with more total bytes), order by (size * group_count) DESC
-// using a subquery or join that provides the count per size for this scan_id.
-// The claimed row is set to
-// hash_status = 'hashing' and returned. Returns (nil, nil) when there is no pending job.
-// Uses a single UPDATE with subquery and RETURNING (SQLite 3.35+) so concurrent
-// workers never receive the same file. Retries on SQLITE_BUSY to allow multiple connections.
+// ClaimNextHashJob atomically claims the next pending hash job for the given scan (sets hash_status = 'hashing') and returns it. Returns (nil, nil) when none.
 func ClaimNextHashJob(ctx context.Context, db *sql.DB, scanID int64) (*File, error) {
-	var result *File
-	err := RetryOnBusy(ctx, claimRetryAttempts, claimRetryBackoff, func() error {
-		f, innerErr := claimNextHashJobOnce(ctx, db, scanID)
-		if innerErr != nil {
-			return innerErr
-		}
-		result = f
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-func claimNextHashJobOnce(ctx context.Context, db *sql.DB, scanID int64) (*File, error) {
 	row := db.QueryRowContext(ctx, `
 		UPDATE files SET hash_status = 'hashing'
 		WHERE id = (
-			SELECT id FROM files
-			WHERE scan_id = ? AND hash_status = 'pending'
-			AND size IN (
-				SELECT size FROM files
-				WHERE scan_id = ? GROUP BY size HAVING COUNT(*) > 1
+			SELECT f.id FROM files f JOIN file_scan fs ON f.id = fs.file_id
+			WHERE fs.scan_id = $1 AND f.hash_status = 'pending'
+			AND f.size IN (
+				SELECT f2.size FROM files f2 JOIN file_scan fs2 ON f2.id = fs2.file_id
+				WHERE fs2.scan_id = $1 GROUP BY f2.size HAVING COUNT(*) > 1
 			)
-			ORDER BY size DESC
+			ORDER BY f.size DESC
 			LIMIT 1
 		)
-		RETURNING id, scan_id, path, size, mtime, inode, device_id, hash, hash_status, hashed_at`,
-		scanID, scanID)
-
-	var f File
-	var deviceID sql.NullInt64
-	var hash sql.NullString
-	var hashedAt nullRFC3339Time
-	err := row.Scan(&f.ID, &f.ScanID, &f.Path, &f.Size, &f.MTime, &f.Inode, &deviceID, &hash, &f.HashStatus, &hashedAt)
+		RETURNING id`,
+		scanID)
+	var fileID int64
+	err := row.Scan(&fileID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
+		return nil, err
+	}
+	// Load full file row with path (we need path for hashing). Join folders for full path.
+	row = db.QueryRowContext(ctx,
+		`SELECT f.id, $2::bigint, (fo.path || '/' || f.path), f.size, f.mtime, f.inode, f.device_id, f.hash, f.hash_status, f.hashed_at
+		 FROM files f JOIN folders fo ON f.folder_id = fo.id WHERE f.id = $1`,
+		fileID, scanID)
+	var f File
+	var deviceID sql.NullInt64
+	var hash sql.NullString
+	var hashedAt nullRFC3339Time
+	if err := row.Scan(&f.ID, &f.ScanID, &f.Path, &f.Size, &f.MTime, &f.Inode, &deviceID, &hash, &f.HashStatus, &hashedAt); err != nil {
 		return nil, err
 	}
 	if deviceID.Valid {

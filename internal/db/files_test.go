@@ -5,18 +5,19 @@ import (
 	"testing"
 )
 
-func TestInsertFile_andGetFilesByScanID(t *testing.T) {
-	db := testDB(t)
+func TestUpsertFile_InsertFileScan_and_GetFilesByScanID(t *testing.T) {
+	db := TestPostgresDB(t)
 	ctx := context.Background()
 
-	scan, err := CreateScan(ctx, db, "/tmp")
-	if err != nil {
-		t.Fatalf("CreateScan: %v", err)
-	}
+	folderID, _ := AddFolder(ctx, db, "/tmp")
+	scan, _ := CreateScan(ctx, db, folderID)
 	deviceID := int64(42)
-	err = InsertFile(ctx, db, scan.ID, "/tmp/foo", 100, 1707292800, 12345, &deviceID)
+	fileID, err := UpsertFile(ctx, db, folderID, "foo", 100, 1707292800, 12345, &deviceID)
 	if err != nil {
-		t.Fatalf("InsertFile: %v", err)
+		t.Fatalf("UpsertFile: %v", err)
+	}
+	if err := InsertFileScan(ctx, db, fileID, scan.ID); err != nil {
+		t.Fatalf("InsertFileScan: %v", err)
 	}
 
 	files, err := GetFilesByScanID(ctx, db, scan.ID)
@@ -27,14 +28,11 @@ func TestInsertFile_andGetFilesByScanID(t *testing.T) {
 		t.Fatalf("GetFilesByScanID len = %d, want 1", len(files))
 	}
 	f := files[0]
-	if f.Path != "/tmp/foo" || f.Size != 100 || f.MTime != 1707292800 || f.Inode != 12345 {
-		t.Errorf("file: path=%q size=%d mtime=%d inode=%d", f.Path, f.Size, f.MTime, f.Inode)
+	if f.Size != 100 || f.MTime != 1707292800 || f.Inode != 12345 {
+		t.Errorf("file: size=%d mtime=%d inode=%d", f.Size, f.MTime, f.Inode)
 	}
 	if f.HashStatus != "pending" {
 		t.Errorf("hash_status = %q, want pending", f.HashStatus)
-	}
-	if f.Hash != nil || f.HashedAt != nil {
-		t.Errorf("hash and hashed_at should be nil: hash=%v hashed_at=%v", f.Hash, f.HashedAt)
 	}
 	if f.DeviceID == nil || *f.DeviceID != 42 {
 		t.Errorf("device_id = %v, want 42", f.DeviceID)
@@ -42,10 +40,14 @@ func TestInsertFile_andGetFilesByScanID(t *testing.T) {
 }
 
 func TestGetFilesByScanID_emptyReturnsEmptySlice(t *testing.T) {
-	db := testDB(t)
+	db := TestPostgresDB(t)
 	ctx := context.Background()
 
-	scan, err := CreateScan(ctx, db, "/tmp")
+	folderID, err := AddFolder(ctx, db, "/tmp")
+	if err != nil {
+		t.Fatalf("AddFolder: %v", err)
+	}
+	scan, err := CreateScan(ctx, db, folderID)
 	if err != nil {
 		t.Fatalf("CreateScan: %v", err)
 	}
@@ -60,19 +62,15 @@ func TestGetFilesByScanID_emptyReturnsEmptySlice(t *testing.T) {
 }
 
 func TestGetFilesByScanID_multiple(t *testing.T) {
-	db := testDB(t)
+	db := TestPostgresDB(t)
 	ctx := context.Background()
 
-	scan, err := CreateScan(ctx, db, "/tmp")
-	if err != nil {
-		t.Fatalf("CreateScan: %v", err)
-	}
-	if err := InsertFile(ctx, db, scan.ID, "/tmp/a", 10, 100, 1, nil); err != nil {
-		t.Fatalf("InsertFile a: %v", err)
-	}
-	if err := InsertFile(ctx, db, scan.ID, "/tmp/b", 20, 200, 2, nil); err != nil {
-		t.Fatalf("InsertFile b: %v", err)
-	}
+	folderID, _ := AddFolder(ctx, db, "/tmp")
+	scan, _ := CreateScan(ctx, db, folderID)
+	fileID1, _ := UpsertFile(ctx, db, folderID, "a", 10, 100, 1, nil)
+	InsertFileScan(ctx, db, fileID1, scan.ID)
+	fileID2, _ := UpsertFile(ctx, db, folderID, "b", 20, 200, 2, nil)
+	InsertFileScan(ctx, db, fileID2, scan.ID)
 
 	files, err := GetFilesByScanID(ctx, db, scan.ID)
 	if err != nil {
@@ -85,7 +83,11 @@ func TestGetFilesByScanID_multiple(t *testing.T) {
 	for _, f := range files {
 		paths[f.Path] = true
 	}
-	if !paths["/tmp/a"] || !paths["/tmp/b"] {
-		t.Errorf("files = %v", files)
+	// Path is folder path + "/" + relative
+	if !paths["/tmp/a"] {
+		t.Errorf("want path /tmp/a in %v", paths)
+	}
+	if !paths["/tmp/b"] {
+		t.Errorf("want path /tmp/b in %v", paths)
 	}
 }

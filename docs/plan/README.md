@@ -39,6 +39,26 @@ This folder holds the phased implementation plan for Ditto. The plan is driven b
 
 ## Release v0.2
 
+**Goal:** Pivot to PostgreSQL and new data model (one row per file per location, ledger for scan–file relationship); plus UX refinement that was not completed in 0.1.
+
+**Decisions that conflict with this release:** Release 0.2 supersedes or updates the following ADRs. See the phase 1 document and the decisions index for details.
+- **ADR-002 (SQLite):** Superseded. Storage is PostgreSQL; connection via `DATABASE_URL` (or equivalent).
+- **ADR-007 (Absolute paths, scan snapshot):** Partially superseded. Freshness and deletion are implemented via the new ledger (`file_scan`); one row per file (folder + path); path is relative to folder root.
+
+| Phase | Name | Goal |
+|-------|------|------|
+| **1** | PostgreSQL and new data model | Replace SQLite with PostgreSQL. New schema: folders, files (one per location), scans, file_scan ledger. Port scan/hash/server to new DB and schema. Enables duplicates across all folders from one store and sets up for “file removed in later scan” (future). |
+| **2** | UX refinement | Polish UI/UX based on usage (originally Release 1, Phase 7; not started in 0.1). Layout, copy, loading states, accessibility, or small workflow tweaks. Can drive minor releases (v0.2.1, v0.2.2, …). |
+
+| Phase | Document | Status |
+|-------|----------|--------|
+| 1 | [rel-2-phase-1-postgres-and-data-model.md](rel-2-phase-1-postgres-and-data-model.md) | Ready |
+| 2 | [rel-2-phase-2-ux-refinement.md](rel-2-phase-2-ux-refinement.md) | Ready |
+
+---
+
+## Release v0.3
+
 **Goal:** Scheduled scans and better progress feedback during long runs.
 
 | Phase | Name | Goal |
@@ -48,12 +68,12 @@ This folder holds the phased implementation plan for Ditto. The plan is driven b
 
 | Phase | Document | Status |
 |-------|----------|--------|
-| 1 | [rel-2-phase-1-weekly-schedule.md](rel-2-phase-1-weekly-schedule.md) | Ready |
-| 2 | [rel-2-phase-2-progress-and-feedback.md](rel-2-phase-2-progress-and-feedback.md) | Ready |
+| 1 | [rel-3-phase-1-weekly-schedule.md](rel-3-phase-1-weekly-schedule.md) | Ready |
+| 2 | [rel-3-phase-2-progress-and-feedback.md](rel-3-phase-2-progress-and-feedback.md) | Ready |
 
 ---
 
-## Release v0.3
+## Release v0.4
 
 **Goal:** User actions on duplicates and robust recovery from failure.
 
@@ -64,8 +84,8 @@ This folder holds the phased implementation plan for Ditto. The plan is driven b
 
 | Phase | Document | Status |
 |-------|----------|--------|
-| 1 | `rel-3-phase-1-actions-and-delivery.md` | Not started |
-| 2 | `rel-3-phase-2-recovery-from-failure.md` | Not started |
+| 1 | `rel-4-phase-1-actions-and-delivery.md` | Not started |
+| 2 | `rel-4-phase-2-recovery-from-failure.md` | Not started |
 
 ---
 

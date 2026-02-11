@@ -1,6 +1,7 @@
 # ADR-007: Absolute paths and scan as source of freshness and deletion
 
-**Date**: 2025-02-07
+**Date**: 2025-02-07  
+**Status:** Partially superseded by Release 0.2. We keep “scan as source of freshness and deletion” but implement it via the new data model: one row per file (folder_id, path with path relative to root); ledger (`file_scan`) records which scan saw which file; “removed” can be recorded on the ledger in a future phase. See [rel-2-phase-1-postgres-and-data-model.md](../plan/rel-2-phase-1-postgres-and-data-model.md).
 
 ## Decision
 

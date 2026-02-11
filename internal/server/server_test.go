@@ -16,17 +16,12 @@ import (
 
 func testServer(t *testing.T) (*Server, *sql.DB) {
 	t.Helper()
-	database, err := db.Open(":memory:")
+	database := db.TestPostgresDB(t)
+	cfg, err := config.Load()
 	if err != nil {
-		t.Fatalf("open: %v", err)
+		t.Fatalf("config (set DATABASE_URL): %v", err)
 	}
-	t.Cleanup(func() { database.Close() })
-	if err := db.Migrate(database); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	cfg := &config.Config{}
-	// Use config's default port for tests (we don't need to listen)
-	srv, err := NewServer(cfg, database, nil)
+	srv, err := NewServer(cfg, database)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -96,14 +91,14 @@ func TestServer_404ForUnknown(t *testing.T) {
 }
 
 func TestServer_RunContextCancelShutsDown(t *testing.T) {
-	// Port 0 so the server binds to an available port (avoids "address already in use" when 8080 is taken)
 	os.Setenv(config.EnvPort, "0")
 	defer os.Unsetenv(config.EnvPort)
-	cfg, _ := config.Load()
-	database, _ := db.Open(":memory:")
-	defer database.Close()
-	_ = db.Migrate(database)
-	srv, err := NewServer(cfg, database, nil)
+	database := db.TestPostgresDB(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	srv, err := NewServer(cfg, database)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}

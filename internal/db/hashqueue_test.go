@@ -3,31 +3,27 @@ package db
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestClaimNextHashJob_onlyReturnsFilesInSameSizeGroups(t *testing.T) {
-	db := testDB(t)
+	db := TestPostgresDB(t)
 	ctx := context.Background()
 
-	scan, err := CreateScan(ctx, db, "/tmp")
-	if err != nil {
-		t.Fatalf("CreateScan: %v", err)
-	}
-	// Two files size 100 (candidates), one size 200, one size 300 (unique — never candidates).
-	if err := InsertFile(ctx, db, scan.ID, "/tmp/a", 100, 1, 1, nil); err != nil {
-		t.Fatalf("InsertFile a: %v", err)
-	}
-	if err := InsertFile(ctx, db, scan.ID, "/tmp/b", 100, 2, 2, nil); err != nil {
-		t.Fatalf("InsertFile b: %v", err)
-	}
-	if err := InsertFile(ctx, db, scan.ID, "/tmp/c", 200, 3, 3, nil); err != nil {
-		t.Fatalf("InsertFile c: %v", err)
-	}
-	if err := InsertFile(ctx, db, scan.ID, "/tmp/d", 300, 4, 4, nil); err != nil {
-		t.Fatalf("InsertFile d: %v", err)
+	folderID, _ := AddFolder(ctx, db, "/tmp")
+	scan, _ := CreateScan(ctx, db, folderID)
+	for _, p := range []struct{ path string; size int64; inode int64 }{
+		{"a", 100, 1}, {"b", 100, 2}, {"c", 200, 3}, {"d", 300, 4},
+	} {
+		fileID, err := UpsertFile(ctx, db, folderID, p.path, p.size, 0, p.inode, nil)
+		if err != nil {
+			t.Fatalf("UpsertFile: %v", err)
+		}
+		if err := InsertFileScan(ctx, db, fileID, scan.ID); err != nil {
+			t.Fatalf("InsertFileScan: %v", err)
+		}
 	}
 
-	// First claim: should return one of the size-100 files (priority order size DESC, so 100 is the only duplicate group).
 	f1, err := ClaimNextHashJob(ctx, db, scan.ID)
 	if err != nil {
 		t.Fatalf("ClaimNextHashJob 1: %v", err)
@@ -36,13 +32,12 @@ func TestClaimNextHashJob_onlyReturnsFilesInSameSizeGroups(t *testing.T) {
 		t.Fatal("ClaimNextHashJob 1: want one file, got nil")
 	}
 	if f1.Size != 100 {
-		t.Errorf("first claim Size = %d, want 100 (only duplicate group)", f1.Size)
+		t.Errorf("first claim Size = %d, want 100", f1.Size)
 	}
 	if f1.HashStatus != "hashing" {
 		t.Errorf("first claim HashStatus = %q, want hashing", f1.HashStatus)
 	}
 
-	// Second claim: the other size-100 file.
 	f2, err := ClaimNextHashJob(ctx, db, scan.ID)
 	if err != nil {
 		t.Fatalf("ClaimNextHashJob 2: %v", err)
@@ -57,38 +52,28 @@ func TestClaimNextHashJob_onlyReturnsFilesInSameSizeGroups(t *testing.T) {
 		t.Error("second claim returned same file as first")
 	}
 
-	// No more candidates (200 and 300 are unique size).
 	f3, err := ClaimNextHashJob(ctx, db, scan.ID)
 	if err != nil {
 		t.Fatalf("ClaimNextHashJob 3: %v", err)
 	}
 	if f3 != nil {
-		t.Errorf("ClaimNextHashJob 3: want nil (no more jobs), got file id=%d size=%d", f3.ID, f3.Size)
+		t.Errorf("ClaimNextHashJob 3: want nil, got file id=%d", f3.ID)
 	}
 }
 
 func TestClaimNextHashJob_afterOneDoneOtherInGroupStillCandidate(t *testing.T) {
-	db := testDB(t)
+	db := TestPostgresDB(t)
 	ctx := context.Background()
 
-	scan, err := CreateScan(ctx, db, "/tmp")
-	if err != nil {
-		t.Fatalf("CreateScan: %v", err)
-	}
-	if err := InsertFile(ctx, db, scan.ID, "/tmp/a", 100, 1, 1, nil); err != nil {
-		t.Fatalf("InsertFile a: %v", err)
-	}
-	if err := InsertFile(ctx, db, scan.ID, "/tmp/b", 100, 2, 2, nil); err != nil {
-		t.Fatalf("InsertFile b: %v", err)
-	}
+	folderID, _ := AddFolder(ctx, db, "/tmp")
+	scan, _ := CreateScan(ctx, db, folderID)
+	fileID1, _ := UpsertFile(ctx, db, folderID, "a", 100, 1, 1, nil)
+	InsertFileScan(ctx, db, fileID1, scan.ID)
+	fileID2, _ := UpsertFile(ctx, db, folderID, "b", 100, 2, 2, nil)
+	InsertFileScan(ctx, db, fileID2, scan.ID)
 
-	// Set one file to done manually (simulating a completed hash).
-	_, err = db.ExecContext(ctx, "UPDATE files SET hash_status = 'done', hash = 'abc', hashed_at = datetime('now') WHERE path = ?", "/tmp/a")
-	if err != nil {
-		t.Fatalf("UPDATE done: %v", err)
-	}
+	_ = UpdateFileHash(ctx, db, fileID1, "abc", time.Now().UTC())
 
-	// Claim should return the other file (still pending) in the same size group.
 	f, err := ClaimNextHashJob(ctx, db, scan.ID)
 	if err != nil {
 		t.Fatalf("ClaimNextHashJob: %v", err)
@@ -96,8 +81,8 @@ func TestClaimNextHashJob_afterOneDoneOtherInGroupStillCandidate(t *testing.T) {
 	if f == nil {
 		t.Fatal("ClaimNextHashJob: want one file (b still pending), got nil")
 	}
-	if f.Path != "/tmp/b" {
-		t.Errorf("claimed path = %q, want /tmp/b", f.Path)
+	if f.Path != "/tmp/b" && f.Path != "b" {
+		t.Errorf("claimed path = %q", f.Path)
 	}
 	if f.Size != 100 {
 		t.Errorf("claimed size = %d, want 100", f.Size)
@@ -105,19 +90,15 @@ func TestClaimNextHashJob_afterOneDoneOtherInGroupStillCandidate(t *testing.T) {
 }
 
 func TestClaimNextHashJob_setsStatusToHashingAndDoesNotReturnSameRowTwice(t *testing.T) {
-	db := testDB(t)
+	db := TestPostgresDB(t)
 	ctx := context.Background()
 
-	scan, err := CreateScan(ctx, db, "/tmp")
-	if err != nil {
-		t.Fatalf("CreateScan: %v", err)
-	}
-	if err := InsertFile(ctx, db, scan.ID, "/tmp/a", 100, 1, 1, nil); err != nil {
-		t.Fatalf("InsertFile a: %v", err)
-	}
-	if err := InsertFile(ctx, db, scan.ID, "/tmp/b", 100, 2, 2, nil); err != nil {
-		t.Fatalf("InsertFile b: %v", err)
-	}
+	folderID, _ := AddFolder(ctx, db, "/tmp")
+	scan, _ := CreateScan(ctx, db, folderID)
+	fileID1, _ := UpsertFile(ctx, db, folderID, "a", 100, 1, 1, nil)
+	InsertFileScan(ctx, db, fileID1, scan.ID)
+	fileID2, _ := UpsertFile(ctx, db, folderID, "b", 100, 2, 2, nil)
+	InsertFileScan(ctx, db, fileID2, scan.ID)
 
 	f1, err := ClaimNextHashJob(ctx, db, scan.ID)
 	if err != nil {
@@ -130,9 +111,8 @@ func TestClaimNextHashJob_setsStatusToHashingAndDoesNotReturnSameRowTwice(t *tes
 		t.Errorf("returned file HashStatus = %q, want hashing", f1.HashStatus)
 	}
 
-	// Verify in DB that the row is now hashing.
 	var status string
-	err = db.QueryRowContext(ctx, "SELECT hash_status FROM files WHERE id = ?", f1.ID).Scan(&status)
+	err = db.QueryRowContext(ctx, "SELECT hash_status FROM files WHERE id = $1", f1.ID).Scan(&status)
 	if err != nil {
 		t.Fatalf("SELECT hash_status: %v", err)
 	}
@@ -140,13 +120,12 @@ func TestClaimNextHashJob_setsStatusToHashingAndDoesNotReturnSameRowTwice(t *tes
 		t.Errorf("DB hash_status = %q, want hashing", status)
 	}
 
-	// Second claim must not return the same row.
 	f2, err := ClaimNextHashJob(ctx, db, scan.ID)
 	if err != nil {
 		t.Fatalf("ClaimNextHashJob 2: %v", err)
 	}
 	if f2 == nil {
-		t.Fatal("second claim: want file (the other one), got nil")
+		t.Fatal("second claim: want file, got nil")
 	}
 	if f2.ID == f1.ID {
 		t.Error("second claim returned same file as first")

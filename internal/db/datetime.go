@@ -40,34 +40,47 @@ type nullRFC3339Time struct {
 	Valid bool
 }
 
-// Scan implements sql.Scanner. Accepts string, []byte, or nil (Valid = false).
+// Scan implements sql.Scanner. Accepts string, []byte, time.Time (Postgres timestamptz), or nil (Valid = false).
 func (n *nullRFC3339Time) Scan(value any) error {
 	if value == nil {
 		n.Valid = false
 		n.Time = time.Time{}
 		return nil
 	}
-	var s string
 	switch v := value.(type) {
+	case time.Time:
+		n.Time = v
+		n.Valid = true
+		return nil
 	case string:
-		s = v
+		if v == "" {
+			n.Valid = false
+			n.Time = time.Time{}
+			return nil
+		}
+		parsed, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return err
+		}
+		n.Time = parsed
+		n.Valid = true
+		return nil
 	case []byte:
-		s = string(v)
+		if len(v) == 0 {
+			n.Valid = false
+			n.Time = time.Time{}
+			return nil
+		}
+		parsed, err := time.Parse(time.RFC3339, string(v))
+		if err != nil {
+			return err
+		}
+		n.Time = parsed
+		n.Valid = true
+		return nil
 	default:
 		return fmt.Errorf("cannot scan %T into nullRFC3339Time", value)
 	}
-	if s == "" {
-		n.Valid = false
-		n.Time = time.Time{}
-		return nil
-	}
-	parsed, err := time.Parse(time.RFC3339, s)
-	if err != nil {
-		return err
-	}
-	n.Time = parsed
-	n.Valid = true
-	return nil
 }
 
 // Ptr returns *time.Time for use in structs; returns nil if not Valid.
