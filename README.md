@@ -99,10 +99,17 @@ In the UI, add scan root **`/scan/Photos`**. For more detail (permissions, troub
 
 ## Development
 
+Tests and the app require PostgreSQL. Start it and set `DATABASE_URL`, then run tests (use `-p 1` to avoid cross-package truncate deadlocks) or the app:
+
 ```bash
-go test ./...
+docker compose -f docker-compose.dev.yml up -d
+export DATABASE_URL="postgres://ditto:ditto@localhost:5432/ditto?sslmode=disable"
+go test -p 1 ./...
 go build -o ditto ./cmd/ditto
+go run ./cmd/ditto   # or run ./ditto
 ```
+
+See [docker-compose.dev.yml](docker-compose.dev.yml) for the default credentials and port.
 
 ## License
 

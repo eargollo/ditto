@@ -11,13 +11,14 @@ This folder contains **Architecture Decision Records (ADRs)** for the Ditto proj
 
 ## Index
 
-| ADR       | Title                                                    |
-|-----------|----------------------------------------------------------|
-| ADR-001   | Packaging strategy for Synology deployment                |
-| ADR-002   | SQLite for persistent storage with external data mount   |
-| ADR-003   | Web UI as primary user experience                        |
-| ADR-004   | HTMX and Tailwind for the Web UI                         |
-| ADR-005   | Separate scan from hashing with prioritized hash queue   |
-| ADR-006   | SHA-256 hashing and duplicate definition (symlinks, hardlinks) |
-| ADR-007   | Absolute paths and scan as source of freshness and deletion     |
-| ADR-008   | Scan hangs on FUSE/cloud paths and default exclude file         |
+| ADR       | Title                                                    | Status |
+|-----------|----------------------------------------------------------|--------|
+| ADR-001   | Packaging strategy for Synology deployment                | Active |
+| ADR-002   | SQLite for persistent storage with external data mount   | **Superseded** by Release 0.2 (PostgreSQL) |
+| ADR-003   | Web UI as primary user experience                        | Active |
+| ADR-004   | HTMX and Tailwind for the Web UI                         | Active |
+| ADR-005   | Separate scan from hashing with prioritized hash queue   | Active |
+| ADR-006   | SHA-256 hashing and duplicate definition (symlinks, hardlinks) | Active |
+| ADR-007   | Absolute paths and scan as source of freshness and deletion     | **Partially superseded** by Release 0.2 (ledger-based model) |
+| ADR-008   | Scan hangs on FUSE/cloud paths and default exclude file         | Active |
+| ADR-009   | PostgreSQL and new data model (Release 0.2)                      | Active |

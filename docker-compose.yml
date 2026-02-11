@@ -10,7 +10,7 @@ services:
     restart: unless-stopped
     environment:
       DITTO_DATA_DIR: /data
-      DITTO_PORT: 8080
+      DITTO_PORT: 8180
       # PUID: 1000
       # PGID: 1000
       # When mounting a host path for /data on Synology, set PUID and PGID to your DSM user (e.g. id admin → PUID=1026 PGID=100)
@@ -19,7 +19,7 @@ services:
       # Mount folders to scan (paths inside container = scan roots in UI)
       # - /path/on/host/Photos:/scan/Photos:ro
     ports:
-      - "8080:8080"
+      - "8180:8180"
 
 volumes:
   ditto-data:

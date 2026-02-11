@@ -1,10 +1,10 @@
-# Release 2, Phase 1: Weekly scheduled scan
+# Release 3, Phase 1: Weekly scheduled scan
 
 **Goal:** Run a full scan of all configured folders automatically on a weekly schedule. The user chooses which weekday and hour the job runs. Only one scan runs at a time (existing serialized queue); manual "Start scan" / "Continue" still enqueue jobs as today.
 
-**Context:** After Release 1 we have scan roots, a serialized scan queue, and manual triggers. This phase adds an in-process scheduler: wake every hour (at the top of the hour), and when the current weekday and hour match the configured schedule, enqueue one scan per folder so they run back-to-back.
+**Context:** After Release 2 we have folders, PostgreSQL, and manual triggers. This phase adds an in-process scheduler: wake every hour (at the top of the hour), and when the current weekday and hour match the configured schedule, enqueue one scan per folder so they run back-to-back.
 
-**References:** Existing scan queue and worker in server; `scan_roots` (or equivalent) for the list of folders.
+**References:** Existing scan queue and worker in server; `folders` (or equivalent) for the list of roots to scan.
 
 ---
 
@@ -12,7 +12,7 @@
 
 - **Granularity:** Hourly only. User picks weekday (e.g. Sunday) and hour (0–23). No minutes.
 - **Wake interval:** Scheduler goroutine wakes at the **top of each hour** (e.g. 00:00, 01:00, 02:00). On startup, first wake is the next round hour to avoid drift.
-- **Trigger logic:** On each wake, compare current weekday and hour to the stored schedule. If they match, enqueue one scan per folder (create scan row per root, then send each scan ID to the existing `scanQueue`). No "next run at" stored; "run when weekday + hour match" is enough.
+- **Trigger logic:** On each wake, compare current weekday and hour to the stored schedule. If they match, enqueue one scan per folder (create scan row per folder, then send each scan ID to the existing `scanQueue`). No "next run at" stored; "run when weekday + hour match" is enough.
 - **One job at a time:** Unchanged. The existing worker drains the queue; weekly run just adds N jobs (one per folder) to that queue.
 - **Manual runs:** User can still click "Start scan" or "Continue" anytime; those jobs are enqueued as today. No change to that flow.
 
@@ -33,7 +33,7 @@
 **Options:**
 - **A)** Single row in a small table, e.g. `schedule_config (weekday INTEGER, hour INTEGER)`. Only one schedule for the whole app (all folders run at the same time).
 - **B)** Column on an existing table if we have a "settings" or "app_config" table.
-- **C)** Env or config file. Less flexible; DB is consistent with scan roots.
+- **C)** Env or config file. Less flexible; DB is consistent with folders.
 
 **Deliverables:**
 - Migration: table or columns for `schedule_weekday` (0–6 or 1–7 per Go `time.Weekday`) and `schedule_hour` (0–23). Nullable or default "disabled" (e.g. null = no automatic run).
@@ -50,13 +50,13 @@
 **Details:**
 - Start the goroutine from the same place the scan worker is started (e.g. `Run(ctx)`). Use the same `ctx` so shutdown cancels it.
 - Sleep until next round hour: `now.Truncate(time.Hour).Add(time.Hour)` (or equivalent) so first wake is at :00. Then `time.Tick(1 * time.Hour)` or sleep 1h in a loop (with `select` on `ctx.Done()` so we don't block shutdown).
-- On wake: get schedule from DB. If not set (null), skip. If set, get current weekday and hour (use local time or configurable TZ; default local). If they match, load all scan roots, for each root create a new scan row (`CreateScan`), then send each scan ID to `s.scanQueue` (non-blocking; if queue full, log and skip remaining or retry one).
+- On wake: get schedule from DB. If not set (null), skip. If set, get current weekday and hour (use local time or configurable TZ; default local). If they match, load all folders (scan roots), for each folder create a new scan row (`CreateScan`), then send each scan ID to `s.scanQueue` (non-blocking; if queue full, log and skip remaining or retry one).
 - Use the **write** DB for creating scans and enqueueing; schedule read can use read DB if desired.
 
 **Deliverables:**
 - Scheduler goroutine that wakes every hour at :00.
 - Match logic: weekday + hour.
-- Enqueue path: list roots → for each, create scan → enqueue scan ID. No duplicate "in progress" check required for the scheduled run (each run is a new scan row).
+- Enqueue path: list folders → for each, create scan → enqueue scan ID. No duplicate "in progress" check required for the scheduled run (each run is a new scan row).
 
 **Review:** When weekday and hour match, N scans are created and N IDs are sent to the queue. When they don't match, no scans created.
 

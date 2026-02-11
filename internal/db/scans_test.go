@@ -7,24 +7,12 @@ import (
 	"testing"
 )
 
-func testDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := Open(":memory:")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := Migrate(db); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	return db
-}
-
 func TestCreateScan_returnsScanWithIDAndCreatedAt(t *testing.T) {
-	db := testDB(t)
+	db := TestPostgresDB(t)
 	ctx := context.Background()
 
-	scan, err := CreateScan(ctx, db, "/tmp/photos")
+	folderID, _ := AddFolder(ctx, db, "/tmp/photos")
+	scan, err := CreateScan(ctx, db, folderID)
 	if err != nil {
 		t.Fatalf("CreateScan: %v", err)
 	}
@@ -48,7 +36,7 @@ func TestCreateScan_returnsScanWithIDAndCreatedAt(t *testing.T) {
 }
 
 func TestGetScan_notFound(t *testing.T) {
-	db := testDB(t)
+	db := TestPostgresDB(t)
 	ctx := context.Background()
 
 	_, err := GetScan(ctx, db, 99999)
@@ -61,7 +49,7 @@ func TestGetScan_notFound(t *testing.T) {
 }
 
 func TestListScans_emptyReturnsEmptySlice(t *testing.T) {
-	db := testDB(t)
+	db := TestPostgresDB(t)
 	ctx := context.Background()
 
 	scans, err := ListScans(ctx, db)
@@ -74,14 +62,16 @@ func TestListScans_emptyReturnsEmptySlice(t *testing.T) {
 }
 
 func TestListScans_newestFirst(t *testing.T) {
-	db := testDB(t)
+	db := TestPostgresDB(t)
 	ctx := context.Background()
 
-	s1, err := CreateScan(ctx, db, "/first")
+	f1, _ := AddFolder(ctx, db, "/first")
+	f2, _ := AddFolder(ctx, db, "/second")
+	s1, err := CreateScan(ctx, db, f1)
 	if err != nil {
 		t.Fatalf("CreateScan first: %v", err)
 	}
-	s2, err := CreateScan(ctx, db, "/second")
+	s2, err := CreateScan(ctx, db, f2)
 	if err != nil {
 		t.Fatalf("CreateScan second: %v", err)
 	}
@@ -99,40 +89,42 @@ func TestListScans_newestFirst(t *testing.T) {
 	}
 }
 
-func TestGetLatestIncompleteScanForRoot(t *testing.T) {
-	db := testDB(t)
+func TestGetLatestIncompleteScanForFolder(t *testing.T) {
+	db := TestPostgresDB(t)
 	ctx := context.Background()
 
-	// No scans: returns 0
-	id, err := GetLatestIncompleteScanForRoot(ctx, db, "/any")
+	// No scans: returns 0 for any folder
+	fooID, _ := GetOrCreateFolderByPath(ctx, db, "/foo")
+	id, err := GetLatestIncompleteScanForFolder(ctx, db, fooID)
 	if err != nil {
-		t.Fatalf("GetLatestIncompleteScanForRoot: %v", err)
+		t.Fatalf("GetLatestIncompleteScanForFolder: %v", err)
 	}
 	if id != 0 {
 		t.Errorf("empty db: got %d, want 0", id)
 	}
 
 	// One incomplete scan for /foo
-	s1, _ := CreateScan(ctx, db, "/foo")
-	id, err = GetLatestIncompleteScanForRoot(ctx, db, "/foo")
+	s1, _ := CreateScan(ctx, db, fooID)
+	id, err = GetLatestIncompleteScanForFolder(ctx, db, fooID)
 	if err != nil {
-		t.Fatalf("GetLatestIncompleteScanForRoot: %v", err)
+		t.Fatalf("GetLatestIncompleteScanForFolder: %v", err)
 	}
 	if id != s1.ID {
 		t.Errorf("one incomplete: got %d, want %d", id, s1.ID)
 	}
 
-	// Complete s1, then create s2 for same root: returns s2 (latest incomplete)
+	// Complete s1, then create s2 for same folder: returns s2 (latest incomplete)
 	_ = UpdateScanCompletedAt(ctx, db, s1.ID, 0, 0)
-	s2, _ := CreateScan(ctx, db, "/foo")
-	id, _ = GetLatestIncompleteScanForRoot(ctx, db, "/foo")
+	s2, _ := CreateScan(ctx, db, fooID)
+	id, _ = GetLatestIncompleteScanForFolder(ctx, db, fooID)
 	if id != s2.ID {
 		t.Errorf("after complete first: got %d, want %d (latest incomplete)", id, s2.ID)
 	}
 
-	// Different root has no incomplete
-	id, _ = GetLatestIncompleteScanForRoot(ctx, db, "/other")
+	// Different folder has no incomplete
+	otherID, _ := AddFolder(ctx, db, "/other")
+	id, _ = GetLatestIncompleteScanForFolder(ctx, db, otherID)
 	if id != 0 {
-		t.Errorf("other root: got %d, want 0", id)
+		t.Errorf("other folder: got %d, want 0", id)
 	}
 }

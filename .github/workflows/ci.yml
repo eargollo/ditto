@@ -10,6 +10,21 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: ditto
+          POSTGRES_PASSWORD: ditto
+          POSTGRES_DB: ditto
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -30,7 +45,9 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Run tests
-        run: go test -v -race -count=1 ./...
+        env:
+          DATABASE_URL: postgres://ditto:ditto@localhost:5432/ditto?sslmode=disable
+        run: go test -v -race -count=1 -p 1 ./...
 
       - name: Build
         run: go build -v -o /dev/null ./cmd/ditto

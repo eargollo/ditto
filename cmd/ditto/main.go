@@ -3,11 +3,9 @@ package main
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"github.com/eargollo/ditto/internal/config"
@@ -28,23 +26,13 @@ func main() {
 		log.Fatalf("create data dir %q: %v", dataDir, err)
 	}
 
-	dbPath := filepath.Join(dataDir, "ditto.db")
-	database, err := db.Open(dbPath)
+	database, err := db.OpenPostgres(cfg.DatabaseURL())
 	if err != nil {
-		log.Fatalf("open db %q: %v", dbPath, err)
+		log.Fatalf("open database: %v", err)
 	}
 	defer database.Close()
 
-	// Read-only connection so the UI stays responsive during scans (WAL allows concurrent readers).
-	readDB, err := db.OpenReadOnly(dbPath)
-	if err != nil {
-		log.Fatalf("open read-only db: %v", err)
-	}
-	if readDB != nil {
-		defer readDB.Close()
-	}
-
-	if err := db.Migrate(database); err != nil {
+	if err := db.MigratePostgres(database); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
 
@@ -53,7 +41,8 @@ func main() {
 		return
 	}
 
-	srv, err := server.NewServer(cfg, database, readDB)
+	// Single DB; Postgres handles concurrent readers and writers.
+	srv, err := server.NewServer(cfg, database, nil)
 	if err != nil {
 		log.Fatalf("server: %v", err)
 	}
@@ -85,63 +74,5 @@ func runScan(ctx context.Context, database *sql.DB, rootPath string) {
 	if err := hash.RunHashPhase(ctx, database, scanID, &hash.HashOptions{Workers: 6}); err != nil {
 		log.Fatalf("hash phase: %v", err)
 	}
-	log.Printf("Hash phase complete for scan %d", scanID)
-
-	// ADR-007: duplicate and current-state queries are scoped to this scan (latest snapshot).
-	rows, err := database.QueryContext(ctx,
-		`SELECT size, COUNT(*) as cnt FROM files WHERE scan_id = ? GROUP BY size ORDER BY cnt DESC, size DESC`,
-		scanID)
-	if err != nil {
-		log.Fatalf("query: %v", err)
-	}
-	defer rows.Close()
-
-	type sizeCount struct {
-		size  int64
-		count int
-	}
-	var sizes []sizeCount
-	for rows.Next() {
-		var sc sizeCount
-		if err := rows.Scan(&sc.size, &sc.count); err != nil {
-			log.Fatalf("scan row: %v", err)
-		}
-		sizes = append(sizes, sc)
-	}
-	if err := rows.Err(); err != nil {
-		log.Fatalf("rows: %v", err)
-	}
-
-	// Paths only for duplicate candidates (count > 1), scoped to this scan_id.
-	pathRows, err := database.QueryContext(ctx,
-		`SELECT size, path FROM files WHERE scan_id = ? AND size IN (
-			SELECT size FROM files WHERE scan_id = ? GROUP BY size HAVING COUNT(*) > 1
-		) ORDER BY size, path`,
-		scanID, scanID)
-	if err != nil {
-		log.Fatalf("query paths: %v", err)
-	}
-	defer pathRows.Close()
-	pathsBySize := make(map[int64][]string)
-	for pathRows.Next() {
-		var size int64
-		var path string
-		if err := pathRows.Scan(&size, &path); err != nil {
-			log.Fatalf("scan path: %v", err)
-		}
-		pathsBySize[size] = append(pathsBySize[size], path)
-	}
-	if err := pathRows.Err(); err != nil {
-		log.Fatalf("path rows: %v", err)
-	}
-
-	fmt.Println("\n--- Files by size (duplicate candidates: count > 1) ---")
-	fmt.Printf("%-16s %s\n", "size", "count")
-	fmt.Printf("%-16s %s\n", "----", "-----")
-	for _, sc := range sizes {
-		fmt.Printf("%-16d %d\n", sc.size, sc.count)
-		for _, path := range pathsBySize[sc.size] {
-			fmt.Printf("  %s\n", path)
-		}
-	}
+	log.Printf("Hash phase complete for scan %d. Use the Web UI to view duplicates.", scanID)
 }

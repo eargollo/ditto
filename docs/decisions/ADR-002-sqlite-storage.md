@@ -1,6 +1,7 @@
 # ADR-002: SQLite for persistent storage with external data mount
 
-**Date**: 2025-02-07
+**Date**: 2025-02-07  
+**Status:** Superseded by Release 0.2 (PostgreSQL and new data model). See [rel-2-phase-1-postgres-and-data-model.md](../plan/rel-2-phase-1-postgres-and-data-model.md) and [alternatives-to-sqlite.md](alternatives-to-sqlite.md).
 
 ## Decision
 

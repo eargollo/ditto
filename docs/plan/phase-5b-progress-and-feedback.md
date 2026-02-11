@@ -1,10 +1,10 @@
-# Release 2, Phase 2: Progress and feedback (improvements)
+# Phase 5b: Progress and feedback (improvements)
 
 **Goal:** Give users visibility into long-running scan and hash operations. The UI should show what is happening under the hood: progress bars where meaningful, and detail such as the file currently being hashed, so that a long run does not feel stuck.
 
-**Context:** After Release 1, starting a scan redirects to a progress page that polls status. Today we only show high-level timestamps and final counts (e.g. hashed file count after hash phase completes). During the run there is no indication of progress or current activity, which can make the experience feel slow or unresponsive.
+**Context:** After Phase 5, starting a scan redirects to a progress page that polls status. Today we only show high-level timestamps and final counts (e.g. hashed file count after hash phase completes). During the run there is no indication of progress or current activity, which can make the experience feel slow or unresponsive.
 
-**References:** [ADR-004](../decisions/ADR-004-htmx-tailwind.md) (HTMX, Tailwind). Builds on Release 1 progress page and status fragment.
+**References:** [ADR-004](../decisions/ADR-004-htmx-tailwind.md) (HTMX, Tailwind). Builds on Phase 5 progress page and status fragment.
 
 ---
 
@@ -80,11 +80,11 @@
 
 ---
 
-## Release 2, Phase 2 done when
+## Phase 5b done when
 
 - [ ] Scan phase shows “files discovered so far” (and “Scan complete. X files” when done).
 - [ ] Hash phase shows progress (e.g. hashed count and total, and optionally bytes).
 - [ ] Optionally: “current file” is shown during hash (e.g. “Hashing: /path/to/file”).
 - [ ] Progress bar is visible for the hash phase (e.g. M of N files).
-- [ ] All of the above work with the existing polling mechanism; no regression to Release 1 behavior.
+- [ ] All of the above work with the existing polling mechanism; no regression to Phase 5 behavior.
 - [ ] Duplicates can be viewed before the scan/hash has finished: inode groups and size-based candidates when data exists; hash-based groups (partial) while hashing, with clear “partial / in progress” labeling.

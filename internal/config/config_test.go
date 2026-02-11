@@ -4,9 +4,12 @@ import (
 	"testing"
 )
 
+const testDatabaseURL = "postgres://localhost/ditto?sslmode=disable"
+
 func TestLoad_usesDefaultsWhenEnvUnset(t *testing.T) {
 	t.Setenv("DITTO_DATA_DIR", "")
 	t.Setenv("DITTO_PORT", "")
+	t.Setenv("DATABASE_URL", testDatabaseURL)
 
 	cfg, err := Load()
 	if err != nil {
@@ -18,11 +21,15 @@ func TestLoad_usesDefaultsWhenEnvUnset(t *testing.T) {
 	if cfg.Port() != 8080 {
 		t.Errorf("Port() = %d, want 8080", cfg.Port())
 	}
+	if cfg.DatabaseURL() != testDatabaseURL {
+		t.Errorf("DatabaseURL() = %q, want %q", cfg.DatabaseURL(), testDatabaseURL)
+	}
 }
 
 func TestLoad_usesEnvWhenSet(t *testing.T) {
 	t.Setenv("DITTO_DATA_DIR", "/tmp/ditto")
 	t.Setenv("DITTO_PORT", "9090")
+	t.Setenv("DATABASE_URL", testDatabaseURL)
 
 	cfg, err := Load()
 	if err != nil {
@@ -36,9 +43,21 @@ func TestLoad_usesEnvWhenSet(t *testing.T) {
 	}
 }
 
+func TestLoad_returnsErrorWhenDatabaseURLUnset(t *testing.T) {
+	t.Setenv("DITTO_DATA_DIR", "")
+	t.Setenv("DITTO_PORT", "")
+	t.Setenv("DATABASE_URL", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Error("Load() err = nil, want non-nil when DATABASE_URL unset")
+	}
+}
+
 func TestLoad_returnsErrorForInvalidPort(t *testing.T) {
 	t.Setenv("DITTO_DATA_DIR", "")
 	t.Setenv("DITTO_PORT", "not-a-number")
+	t.Setenv("DATABASE_URL", testDatabaseURL)
 
 	_, err := Load()
 	if err == nil {
@@ -49,6 +68,7 @@ func TestLoad_returnsErrorForInvalidPort(t *testing.T) {
 func TestLoad_returnsErrorForNegativePort(t *testing.T) {
 	t.Setenv("DITTO_DATA_DIR", "")
 	t.Setenv("DITTO_PORT", "-1")
+	t.Setenv("DATABASE_URL", testDatabaseURL)
 
 	_, err := Load()
 	if err == nil {

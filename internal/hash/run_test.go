@@ -15,15 +15,18 @@ import (
 
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
-	database, err := db.Open(":memory:")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
+	return db.TestPostgresDB(t)
+}
+
+// addFileToScan inserts a file into the scan (folder from dir, relative path from absPath).
+func addFileToScan(ctx context.Context, database *sql.DB, dir string, scanID int64, absPath string, size, mtime, inode int64, deviceID *int64) {
+	folderID, _ := db.GetOrCreateFolderByPath(ctx, database, dir)
+	rel, _ := filepath.Rel(dir, absPath)
+	if rel == "" || rel == "." {
+		rel = filepath.Base(absPath)
 	}
-	t.Cleanup(func() { database.Close() })
-	if err := db.Migrate(database); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	return database
+	fileID, _ := db.UpsertFile(ctx, database, folderID, rel, size, mtime, inode, deviceID)
+	_ = db.InsertFileScan(ctx, database, fileID, scanID)
 }
 
 func TestRunHashPhase_fillsHashForDuplicateCandidatesOnly(t *testing.T) {
@@ -31,11 +34,8 @@ func TestRunHashPhase_fillsHashForDuplicateCandidatesOnly(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	scan, err := db.CreateScan(ctx, database, dir)
-	if err != nil {
-		t.Fatalf("CreateScan: %v", err)
-	}
-	// Two files size 100 (candidates), one file size 200 (unique)
+	folderID, _ := db.GetOrCreateFolderByPath(ctx, database, dir)
+	scan, _ := db.CreateScan(ctx, database, folderID)
 	path1 := filepath.Join(dir, "a.txt")
 	path2 := filepath.Join(dir, "b.txt")
 	path3 := filepath.Join(dir, "c.txt")
@@ -47,15 +47,9 @@ func TestRunHashPhase_fillsHashForDuplicateCandidatesOnly(t *testing.T) {
 	abs1, _ := filepath.Abs(path1)
 	abs2, _ := filepath.Abs(path2)
 	abs3, _ := filepath.Abs(path3)
-	if err := db.InsertFile(ctx, database, scan.ID, abs1, 100, 1, 1, nil); err != nil {
-		t.Fatalf("InsertFile: %v", err)
-	}
-	if err := db.InsertFile(ctx, database, scan.ID, abs2, 100, 2, 2, nil); err != nil {
-		t.Fatalf("InsertFile: %v", err)
-	}
-	if err := db.InsertFile(ctx, database, scan.ID, abs3, 200, 3, 3, nil); err != nil {
-		t.Fatalf("InsertFile: %v", err)
-	}
+	addFileToScan(ctx, database, dir, scan.ID, abs1, 100, 1, 1, nil)
+	addFileToScan(ctx, database, dir, scan.ID, abs2, 100, 2, 2, nil)
+	addFileToScan(ctx, database, dir, scan.ID, abs3, 200, 3, 3, nil)
 	if err := db.UpdateScanCompletedAt(ctx, database, scan.ID, 3, 0); err != nil {
 		t.Fatalf("UpdateScanCompletedAt: %v", err)
 	}
@@ -72,13 +66,24 @@ func TestRunHashPhase_fillsHashForDuplicateCandidatesOnly(t *testing.T) {
 	for _, f := range files {
 		byPath[f.Path] = f
 	}
-	for _, path := range []string{abs1, abs2} {
-		f := byPath[path]
-		if f.Hash == nil || f.HashStatus != "done" || f.HashedAt == nil {
-			t.Errorf("file %s: hash=%v status=%q hashed_at=%v", path, f.Hash, f.HashStatus, f.HashedAt)
+	// Path in byPath may be full (dir/a.txt) or absolute
+	for _, path := range []string{abs1, abs2, filepath.Join(dir, "a.txt"), filepath.Join(dir, "b.txt")} {
+		if f, ok := byPath[path]; ok {
+			if f.Hash == nil || f.HashStatus != "done" || f.HashedAt == nil {
+				t.Errorf("file %s: hash=%v status=%q hashed_at=%v", path, f.Hash, f.HashStatus, f.HashedAt)
+			}
 		}
 	}
-	f3 := byPath[abs3]
+	var f3 *db.File
+	for i := range files {
+		if filepath.Base(files[i].Path) == "c.txt" {
+			f3 = &files[i]
+			break
+		}
+	}
+	if f3 == nil {
+		t.Fatal("file c.txt not found in results")
+	}
 	if f3.Hash != nil || f3.HashStatus != "pending" {
 		t.Errorf("unique size file should remain pending: hash=%v status=%q", f3.Hash, f3.HashStatus)
 	}
@@ -89,7 +94,8 @@ func TestRunHashPhase_twoFilesSameSizeSameHash(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	scan, _ := db.CreateScan(ctx, database, dir)
+	folderID, _ := db.GetOrCreateFolderByPath(ctx, database, dir)
+	scan, _ := db.CreateScan(ctx, database, folderID)
 	content := []byte("identical")
 	path1 := filepath.Join(dir, "a.txt")
 	path2 := filepath.Join(dir, "b.txt")
@@ -101,8 +107,8 @@ func TestRunHashPhase_twoFilesSameSizeSameHash(t *testing.T) {
 	}
 	abs1, _ := filepath.Abs(path1)
 	abs2, _ := filepath.Abs(path2)
-	db.InsertFile(ctx, database, scan.ID, abs1, int64(len(content)), 1, 1, nil)
-	db.InsertFile(ctx, database, scan.ID, abs2, int64(len(content)), 2, 2, nil)
+	addFileToScan(ctx, database, dir, scan.ID, abs1, int64(len(content)), 1, 1, nil)
+	addFileToScan(ctx, database, dir, scan.ID, abs2, int64(len(content)), 2, 2, nil)
 	db.UpdateScanCompletedAt(ctx, database, scan.ID, 2, 0)
 
 	if err := RunHashPhase(ctx, database, scan.ID, nil); err != nil {
@@ -124,15 +130,16 @@ func TestRunHashPhase_setsHashMetricsOnScan(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	scan, _ := db.CreateScan(ctx, database, dir)
+	folderID, _ := db.GetOrCreateFolderByPath(ctx, database, dir)
+	scan, _ := db.CreateScan(ctx, database, folderID)
 	path1 := filepath.Join(dir, "a.txt")
 	path2 := filepath.Join(dir, "b.txt")
 	os.WriteFile(path1, []byte("x"), 0644)
 	os.WriteFile(path2, []byte("x"), 0644)
 	abs1, _ := filepath.Abs(path1)
 	abs2, _ := filepath.Abs(path2)
-	db.InsertFile(ctx, database, scan.ID, abs1, 1, 1, 1, nil)
-	db.InsertFile(ctx, database, scan.ID, abs2, 1, 2, 2, nil)
+	addFileToScan(ctx, database, dir, scan.ID, abs1, 1, 1, 1, nil)
+	addFileToScan(ctx, database, dir, scan.ID, abs2, 1, 2, 2, nil)
 	db.UpdateScanCompletedAt(ctx, database, scan.ID, 2, 0)
 
 	if err := RunHashPhase(ctx, database, scan.ID, nil); err != nil {
@@ -160,7 +167,8 @@ func TestRunHashPhase_setsHashMetricsOnScan(t *testing.T) {
 func TestRunHashPhase_noMetricsWhenNotRun(t *testing.T) {
 	database := testDB(t)
 	ctx := context.Background()
-	scan, _ := db.CreateScan(ctx, database, "/tmp")
+	folderID, _ := db.AddFolder(ctx, database, "/tmp")
+	scan, _ := db.CreateScan(ctx, database, folderID)
 	s, _ := db.GetScan(ctx, database, scan.ID)
 	if s.HashStartedAt != nil || s.HashCompletedAt != nil || s.HashedFileCount != nil || s.HashedByteCount != nil {
 		t.Errorf("scan without hash phase should have null metrics: %+v", s)
@@ -172,7 +180,8 @@ func TestRunHashPhase_hardlinkReuseOneRead(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	scan, _ := db.CreateScan(ctx, database, dir)
+	folderID, _ := db.GetOrCreateFolderByPath(ctx, database, dir)
+	scan, _ := db.CreateScan(ctx, database, folderID)
 	path1 := filepath.Join(dir, "a.txt")
 	if err := os.WriteFile(path1, []byte("x"), 0644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -188,8 +197,8 @@ func TestRunHashPhase_hardlinkReuseOneRead(t *testing.T) {
 	inode1 := inodeOf(info1)
 	inode2 := inodeOf(info2)
 	dev := deviceOf(info1)
-	db.InsertFile(ctx, database, scan.ID, abs1, 1, 1, inode1, dev)
-	db.InsertFile(ctx, database, scan.ID, abs2, 1, 2, inode2, dev)
+	addFileToScan(ctx, database, dir, scan.ID, abs1, 1, 1, inode1, dev)
+	addFileToScan(ctx, database, dir, scan.ID, abs2, 1, 2, inode2, dev)
 	db.UpdateScanCompletedAt(ctx, database, scan.ID, 2, 0)
 
 	if err := RunHashPhase(ctx, database, scan.ID, nil); err != nil {
@@ -227,31 +236,20 @@ func deviceOf(info os.FileInfo) *int64 {
 }
 
 func TestRunHashPhase_twoWorkersAllFilesHashedOnce(t *testing.T) {
-	// Use a temp file so multiple DB connections share the same database.
-	// Use a single connection so SQLite doesn't hit SQLITE_BUSY (workers take turns on the same conn).
-	tmp := filepath.Join(t.TempDir(), "db.sqlite")
-	database, err := db.Open(tmp)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { database.Close() })
-	database.SetMaxOpenConns(1)
-	if err := db.Migrate(database); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
+	database := testDB(t)
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	scan, _ := db.CreateScan(ctx, database, dir)
-	// 6 files in 3 size groups (2 files each)
+	folderID, _ := db.GetOrCreateFolderByPath(ctx, database, dir)
+	scan, _ := db.CreateScan(ctx, database, folderID)
 	for i := 0; i < 6; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("f%d.txt", i))
 		if err := os.WriteFile(path, []byte("x"), 0644); err != nil {
 			t.Fatalf("write: %v", err)
 		}
 		abs, _ := filepath.Abs(path)
-		size := int64(10 + (i / 2)) // sizes 10,10, 11,11, 12,12
-		db.InsertFile(ctx, database, scan.ID, abs, size, int64(i), int64(i+1), nil)
+		size := int64(10 + (i / 2))
+		addFileToScan(ctx, database, dir, scan.ID, abs, size, int64(i), int64(i+1), nil)
 	}
 	db.UpdateScanCompletedAt(ctx, database, scan.ID, 6, 0)
 
@@ -279,12 +277,13 @@ func TestRunHashPhase_throttleEnabledDelays(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	scan, _ := db.CreateScan(ctx, database, dir)
+	folderID, _ := db.GetOrCreateFolderByPath(ctx, database, dir)
+	scan, _ := db.CreateScan(ctx, database, folderID)
 	for i := 0; i < 3; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("f%d.txt", i))
 		os.WriteFile(path, []byte("x"), 0644)
 		abs, _ := filepath.Abs(path)
-		db.InsertFile(ctx, database, scan.ID, abs, 1, int64(i), int64(i+1), nil)
+		addFileToScan(ctx, database, dir, scan.ID, abs, 1, int64(i), int64(i+1), nil)
 	}
 	db.UpdateScanCompletedAt(ctx, database, scan.ID, 3, 0)
 
@@ -302,12 +301,13 @@ func TestRunHashPhase_contextCancellationStopsLoop(t *testing.T) {
 	database := testDB(t)
 	ctx := context.Background()
 	dir := t.TempDir()
-	scan, _ := db.CreateScan(ctx, database, dir)
+	folderID, _ := db.GetOrCreateFolderByPath(ctx, database, dir)
+	scan, _ := db.CreateScan(ctx, database, folderID)
 	for i := 0; i < 10; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("f%d.txt", i))
 		os.WriteFile(path, []byte("x"), 0644)
 		abs, _ := filepath.Abs(path)
-		db.InsertFile(ctx, database, scan.ID, abs, 1, int64(i), int64(i+1), nil)
+		addFileToScan(ctx, database, dir, scan.ID, abs, 1, int64(i), int64(i+1), nil)
 	}
 	db.UpdateScanCompletedAt(ctx, database, scan.ID, 10, 0)
 
@@ -324,12 +324,13 @@ func TestRunHashPhase_throttleDisabledFast(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	scan, _ := db.CreateScan(ctx, database, dir)
+	folderID, _ := db.GetOrCreateFolderByPath(ctx, database, dir)
+	scan, _ := db.CreateScan(ctx, database, folderID)
 	for i := 0; i < 5; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("f%d.txt", i))
 		os.WriteFile(path, []byte("x"), 0644)
 		abs, _ := filepath.Abs(path)
-		db.InsertFile(ctx, database, scan.ID, abs, 1, int64(i), int64(i+1), nil)
+		addFileToScan(ctx, database, dir, scan.ID, abs, 1, int64(i), int64(i+1), nil)
 	}
 	db.UpdateScanCompletedAt(ctx, database, scan.ID, 5, 0)
 

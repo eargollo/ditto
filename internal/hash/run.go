@@ -71,7 +71,6 @@ func RunHashPhase(ctx context.Context, database *sql.DB, scanID int64, opts *Has
 	if err := db.UpdateScanHashStartedAt(ctx, database, scanID); err != nil {
 		return err
 	}
-	db.ResetBusyRetryCount()
 	total, _ := db.CountHashCandidates(ctx, database, scanID) // best-effort for progress; 0 on error
 	n := opts.workers()
 	log.Printf("[hash] phase started for scan %d (%d worker(s), %d files to hash)", scanID, n, total)
@@ -86,7 +85,7 @@ func RunHashPhase(ctx context.Context, database *sql.DB, scanID int64, opts *Has
 	if err != nil {
 		return err
 	}
-	log.Printf("[hash] phase completed for scan %d: %d files, %d bytes, %d reused, %d errors (SQLITE_BUSY retries: %d)", scanID, fileCount, byteCount, reusedCount.Load(), hashErrorCount.Load(), db.BusyRetryCount())
+	log.Printf("[hash] phase completed for scan %d: %d files, %d bytes, %d reused, %d errors", scanID, fileCount, byteCount, reusedCount.Load(), hashErrorCount.Load())
 	return db.UpdateScanHashCompletedAt(ctx, database, scanID, fileCount, byteCount, reusedCount.Load(), hashErrorCount.Load())
 }
 

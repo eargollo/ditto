@@ -14,15 +14,7 @@ import (
 
 func runTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	database, err := db.Open(":memory:")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { database.Close() })
-	if err := db.Migrate(database); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	return database
+	return db.TestPostgresDB(t)
 }
 
 func TestRunScan_populatesScanAndFilesWithCompletedAt(t *testing.T) {
