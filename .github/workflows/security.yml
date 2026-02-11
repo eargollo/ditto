@@ -29,9 +29,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
-      # Use go run so the tool runs with the same Go as the project (go.mod / mise / setup-go)
       - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest -scan=module
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   gosec:
     name: Static analysis (gosec)
