@@ -1,8 +1,9 @@
 module github.com/eargollo/ditto
 
-go 1.24.0
+go 1.24.13
 
 require (
+	github.com/jackc/pgx/v5 v5.8.0
 	golang.org/x/time v0.14.0
 	modernc.org/sqlite v1.44.3
 )
@@ -12,7 +13,6 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.8.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
