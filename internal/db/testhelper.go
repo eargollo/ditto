@@ -9,6 +9,9 @@ import (
 
 // DefaultTestDatabaseURL is the default PostgreSQL URL for tests when DATABASE_URL is unset.
 // Matches docker-compose.dev.yml (postgres service: ditto/ditto@localhost:5432/ditto).
+// Credentials are for local/dev test DB only, not production.
+//
+// #nosec G101 -- test default for local Postgres (docker-compose.dev.yml), not a production secret
 const DefaultTestDatabaseURL = "postgres://ditto:ditto@localhost:5432/ditto?sslmode=disable"
 
 // TestPostgresDB opens a PostgreSQL connection from DATABASE_URL (or DefaultTestDatabaseURL if unset), runs MigratePostgres, and truncates tables so each test gets a clean state.
