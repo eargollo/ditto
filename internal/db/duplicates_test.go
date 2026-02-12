@@ -11,7 +11,13 @@ func TestDuplicateGroupsByHash_and_FilesInHashGroup(t *testing.T) {
 	db := TestPostgresDB(t)
 
 	folderID, _ := AddFolder(ctx, db, "/tmp")
-	scan, _ := CreateScan(ctx, db, folderID)
+	scan, err := CreateScan(ctx, db, folderID)
+	if err != nil {
+		t.Fatalf("CreateScan: %v", err)
+	}
+	if scan == nil {
+		t.Fatal("CreateScan: got nil scan")
+	}
 	fileID1, _ := UpsertFile(ctx, db, folderID, "a", 100, 0, 1, nil)
 	InsertFileScan(ctx, db, fileID1, scan.ID)
 	fileID2, _ := UpsertFile(ctx, db, folderID, "b", 100, 0, 2, nil)
@@ -47,8 +53,20 @@ func TestDuplicateGroupsByHashAcrossScans(t *testing.T) {
 
 	folder1ID, _ := AddFolder(ctx, db, "/folder1")
 	folder2ID, _ := AddFolder(ctx, db, "/folder2")
-	scan1, _ := CreateScan(ctx, db, folder1ID)
-	scan2, _ := CreateScan(ctx, db, folder2ID)
+	scan1, err := CreateScan(ctx, db, folder1ID)
+	if err != nil {
+		t.Fatalf("CreateScan folder1: %v", err)
+	}
+	if scan1 == nil {
+		t.Fatal("CreateScan folder1: got nil scan")
+	}
+	scan2, err := CreateScan(ctx, db, folder2ID)
+	if err != nil {
+		t.Fatalf("CreateScan folder2: %v", err)
+	}
+	if scan2 == nil {
+		t.Fatal("CreateScan folder2: got nil scan")
+	}
 	hash := "xyz"
 	now := time.Now().UTC()
 	for _, pair := range []struct{ folderID int64; path string; size int64; inode int64 }{

@@ -89,6 +89,40 @@ func TestClaimNextHashJob_afterOneDoneOtherInGroupStillCandidate(t *testing.T) {
 	}
 }
 
+// TestClaimNextHashJob_crossScanSameSizeUniquePerScan ensures that when two scans each have
+// exactly one file of the same size (no same-size pair within either scan), the second scan's
+// hash phase still queues that file because the size appears in another scan.
+func TestClaimNextHashJob_crossScanSameSizeUniquePerScan(t *testing.T) {
+	db := TestPostgresDB(t)
+	ctx := context.Background()
+
+	folder1, _ := AddFolder(ctx, db, "/folder1")
+	folder2, _ := AddFolder(ctx, db, "/folder2")
+	scan1, _ := CreateScan(ctx, db, folder1)
+	scan2, _ := CreateScan(ctx, db, folder2)
+
+	// One file of size 1000 in each folder (unique per scan).
+	file1, _ := UpsertFile(ctx, db, folder1, "only", 1000, 0, 1, nil)
+	InsertFileScan(ctx, db, file1, scan1.ID)
+	file2, _ := UpsertFile(ctx, db, folder2, "only", 1000, 0, 2, nil)
+	InsertFileScan(ctx, db, file2, scan2.ID)
+
+	// Hash phase for scan2: file in scan2 should be a candidate because size 1000 exists in scan1.
+	f, err := ClaimNextHashJob(ctx, db, scan2.ID)
+	if err != nil {
+		t.Fatalf("ClaimNextHashJob: %v", err)
+	}
+	if f == nil {
+		t.Fatal("ClaimNextHashJob: want one file (scan2's file — same size as in scan1), got nil")
+	}
+	if f.Size != 1000 {
+		t.Errorf("claimed size = %d, want 1000", f.Size)
+	}
+	if f.ID != file2 {
+		t.Errorf("claimed file id = %d, want %d", f.ID, file2)
+	}
+}
+
 func TestClaimNextHashJob_setsStatusToHashingAndDoesNotReturnSameRowTwice(t *testing.T) {
 	db := TestPostgresDB(t)
 	ctx := context.Background()

@@ -16,10 +16,14 @@ import (
 
 func testServer(t *testing.T) (*Server, *sql.DB) {
 	t.Helper()
+	if os.Getenv(config.EnvDatabaseURL) == "" {
+		os.Setenv(config.EnvDatabaseURL, db.DefaultTestDatabaseURL)
+		defer os.Unsetenv(config.EnvDatabaseURL)
+	}
 	database := db.TestPostgresDB(t)
 	cfg, err := config.Load()
 	if err != nil {
-		t.Fatalf("config (set DATABASE_URL): %v", err)
+		t.Fatalf("config: %v", err)
 	}
 	srv, err := NewServer(cfg, database)
 	if err != nil {
@@ -93,6 +97,10 @@ func TestServer_404ForUnknown(t *testing.T) {
 func TestServer_RunContextCancelShutsDown(t *testing.T) {
 	os.Setenv(config.EnvPort, "0")
 	defer os.Unsetenv(config.EnvPort)
+	if os.Getenv(config.EnvDatabaseURL) == "" {
+		os.Setenv(config.EnvDatabaseURL, db.DefaultTestDatabaseURL)
+		defer os.Unsetenv(config.EnvDatabaseURL)
+	}
 	database := db.TestPostgresDB(t)
 	cfg, err := config.Load()
 	if err != nil {
