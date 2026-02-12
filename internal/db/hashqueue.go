@@ -5,16 +5,25 @@ import (
 	"database/sql"
 )
 
-// CountHashCandidates returns the number of files in this scan that are hash candidates (in a same-size group).
+// sizeCandidateSubquery returns a SQL fragment (single line) that selects sizes for which we should hash:
+// - same size appears more than once in the current scan, OR
+// - same size as any already-hashed file (any scan), OR
+// - same size as any file in another scan (cross-folder duplicates when size is unique per scan).
+// Parameter $1 = current scan_id.
+const sizeCandidateSubquery = `
+		SELECT f2.size FROM files f2 JOIN file_scan fs2 ON f2.id = fs2.file_id WHERE fs2.scan_id = $1 GROUP BY f2.size HAVING COUNT(*) > 1
+		UNION
+		SELECT size FROM files WHERE hash_status = 'done'
+		UNION
+		SELECT f2.size FROM files f2 JOIN file_scan fs2 ON f2.id = fs2.file_id WHERE fs2.scan_id != $1`
+
+// CountHashCandidates returns the number of files in this scan that are hash candidates.
 func CountHashCandidates(ctx context.Context, db *sql.DB, scanID int64) (int64, error) {
 	var n int64
 	err := db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM files f
 		JOIN file_scan fs ON f.id = fs.file_id
-		WHERE fs.scan_id = $1 AND f.hash_status = 'pending' AND f.size IN (
-			SELECT f2.size FROM files f2 JOIN file_scan fs2 ON f2.id = fs2.file_id
-			WHERE fs2.scan_id = $2 GROUP BY f2.size HAVING COUNT(*) > 1
-		)`, scanID, scanID).Scan(&n)
+		WHERE fs.scan_id = $1 AND f.hash_status = 'pending' AND f.size IN (`+sizeCandidateSubquery+`)`, scanID).Scan(&n)
 	return n, err
 }
 
@@ -24,10 +33,7 @@ const pendingHashJobsQuery = `
 	JOIN file_scan fs ON f.id = fs.file_id
 	JOIN folders fo ON f.folder_id = fo.id
 	WHERE fs.scan_id = $1 AND f.hash_status = 'pending'
-	AND f.size IN (
-		SELECT f2.size FROM files f2 JOIN file_scan fs2 ON f2.id = fs2.file_id
-		WHERE fs2.scan_id = $1 GROUP BY f2.size HAVING COUNT(*) > 1
-	)
+	AND f.size IN (` + sizeCandidateSubquery + `)
 	ORDER BY f.size DESC`
 
 // ForEachPendingHashJob runs one query to stream all pending hash jobs for the scan. For each row it calls fn.
@@ -68,10 +74,7 @@ func ClaimNextHashJob(ctx context.Context, db *sql.DB, scanID int64) (*File, err
 		WHERE id = (
 			SELECT f.id FROM files f JOIN file_scan fs ON f.id = fs.file_id
 			WHERE fs.scan_id = $1 AND f.hash_status = 'pending'
-			AND f.size IN (
-				SELECT f2.size FROM files f2 JOIN file_scan fs2 ON f2.id = fs2.file_id
-				WHERE fs2.scan_id = $1 GROUP BY f2.size HAVING COUNT(*) > 1
-			)
+			AND f.size IN (`+sizeCandidateSubquery+`)
 			ORDER BY f.size DESC
 			LIMIT 1
 		)

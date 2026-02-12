@@ -35,7 +35,13 @@ func TestRunHashPhase_fillsHashForDuplicateCandidatesOnly(t *testing.T) {
 	dir := t.TempDir()
 
 	folderID, _ := db.GetOrCreateFolderByPath(ctx, database, dir)
-	scan, _ := db.CreateScan(ctx, database, folderID)
+	scan, err := db.CreateScan(ctx, database, folderID)
+	if err != nil {
+		t.Fatalf("CreateScan: %v (tests use the default DB when DATABASE_URL is unset; ensure Postgres is running, e.g. docker compose -f docker-compose.dev.yml up -d)", err)
+	}
+	if scan == nil {
+		t.Fatal("CreateScan: got nil scan")
+	}
 	path1 := filepath.Join(dir, "a.txt")
 	path2 := filepath.Join(dir, "b.txt")
 	path3 := filepath.Join(dir, "c.txt")
@@ -169,7 +175,13 @@ func TestRunHashPhase_noMetricsWhenNotRun(t *testing.T) {
 	ctx := context.Background()
 	folderID, _ := db.AddFolder(ctx, database, "/tmp")
 	scan, _ := db.CreateScan(ctx, database, folderID)
-	s, _ := db.GetScan(ctx, database, scan.ID)
+	s, err := db.GetScan(ctx, database, scan.ID)
+	if err != nil {
+		t.Fatalf("GetScan: %v", err)
+	}
+	if s == nil {
+		t.Fatal("GetScan: got nil scan")
+	}
 	if s.HashStartedAt != nil || s.HashCompletedAt != nil || s.HashedFileCount != nil || s.HashedByteCount != nil {
 		t.Errorf("scan without hash phase should have null metrics: %+v", s)
 	}

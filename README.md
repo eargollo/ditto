@@ -99,17 +99,19 @@ In the UI, add scan root **`/scan/Photos`**. For more detail (permissions, troub
 
 ## Development
 
-Tests and the app require PostgreSQL. Start it and set `DATABASE_URL`, then run tests (use `-p 1` to avoid cross-package truncate deadlocks) or the app:
+Tests and the app require PostgreSQL. Start the dev database, then run tests or the app:
 
 ```bash
 docker compose -f docker-compose.dev.yml up -d
+make test   # or: go test -p 1 ./...
 export DATABASE_URL="postgres://ditto:ditto@localhost:5432/ditto?sslmode=disable"
-go test -p 1 ./...
-go build -o ditto ./cmd/ditto
+make build  # or: go build -o ditto ./cmd/ditto
 go run ./cmd/ditto   # or run ./ditto
 ```
 
-See [docker-compose.dev.yml](docker-compose.dev.yml) for the default credentials and port.
+**Important:** Tests must run with `-p 1` (one package at a time) because they share a single Postgres instance and truncate the same tables; running `go test ./...` without `-p 1` causes deadlocks. Use `make test` to get the correct flags.
+
+Tests default to `postgres://ditto:ditto@localhost:5432/ditto?sslmode=disable` when `DATABASE_URL` is unset. The app still requires `DATABASE_URL`. See [docker-compose.dev.yml](docker-compose.dev.yml) for credentials and port.
 
 ## License
 
