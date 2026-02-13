@@ -78,6 +78,7 @@ func UpsertFilesBatch(ctx context.Context, database *sql.DB, folderID int64, row
 		}
 		args = append(args, folderID, r.Path, r.Size, r.MTime, r.Inode, dev)
 	}
+	// #nosec G202 -- placeholders built from len(rows); all values passed as args
 	query := `INSERT INTO files (folder_id, path, size, mtime, inode, device_id, hash_status)
 		VALUES ` + strings.Join(placeholders, ", ") + `
 		ON CONFLICT (folder_id, path) DO UPDATE SET size = EXCLUDED.size, mtime = EXCLUDED.mtime, inode = EXCLUDED.inode, device_id = EXCLUDED.device_id
@@ -121,6 +122,7 @@ func InsertFileScanBatch(ctx context.Context, database *sql.DB, fileIDs []int64,
 	for i := 0; i < n; i++ {
 		placeholders[i] = fmt.Sprintf("($%d,$%d)", i+1, scanParam)
 	}
+	// #nosec G202 -- placeholders built from len(fileIDs); all values passed as args
 	query := `INSERT INTO file_scan (file_id, scan_id) VALUES ` + strings.Join(placeholders, ", ") + `
 		ON CONFLICT (file_id, scan_id) DO NOTHING`
 	_, err := database.ExecContext(ctx, query, args...)
