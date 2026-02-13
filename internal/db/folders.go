@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"time"
 )
 
@@ -36,10 +37,15 @@ func ListFolders(ctx context.Context, database *sql.DB) ([]Folder, error) {
 	return list, rows.Err()
 }
 
-// AddFolder inserts a new folder and returns its id.
+// AddFolder inserts a new folder and returns its id. Path is normalized to absolute before storing.
 func AddFolder(ctx context.Context, database *sql.DB, path string) (int64, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return 0, err
+	}
+	path = filepath.Clean(path)
 	var id int64
-	err := database.QueryRowContext(ctx,
+	err = database.QueryRowContext(ctx,
 		"INSERT INTO folders (path, created_at) VALUES ($1, $2) RETURNING id",
 		path, NowUTC()).Scan(&id)
 	return id, err
@@ -68,9 +74,15 @@ func DeleteFolder(ctx context.Context, database *sql.DB, id int64) (bool, error)
 }
 
 // GetOrCreateFolderByPath returns the folder id for the given path, creating the folder if it does not exist.
+// Path is normalized to absolute before lookup and when creating, so folders are always stored by absolute path.
 func GetOrCreateFolderByPath(ctx context.Context, database *sql.DB, path string) (int64, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return 0, err
+	}
+	path = filepath.Clean(path)
 	var id int64
-	err := database.QueryRowContext(ctx, "SELECT id FROM folders WHERE path = $1", path).Scan(&id)
+	err = database.QueryRowContext(ctx, "SELECT id FROM folders WHERE path = $1", path).Scan(&id)
 	if err == nil {
 		return id, nil
 	}

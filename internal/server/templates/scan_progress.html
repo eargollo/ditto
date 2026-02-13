@@ -14,9 +14,10 @@
 {{define "scan-status-fragment"}}
 <div class="rounded border border-gray-200 p-4 bg-white">
   <table class="min-w-full text-sm">
+    <tr><td class="font-medium text-gray-700 pr-4">Status</td><td>{{if .HashCompletedAt}}Done{{else if .HashStartedAt}}Hashing…{{else if .CompletedAt}}Hashing…{{else}}Scanning…{{end}}</td></tr>
     <tr><td class="font-medium text-gray-700 pr-4">Created</td><td>{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td></tr>
     <tr><td class="font-medium text-gray-700 pr-4">Completed</td><td>{{if .CompletedAt}}{{.CompletedAt.Format "2006-01-02 15:04:05"}}{{else}}—{{end}}</td></tr>
-    <tr><td class="font-medium text-gray-700 pr-4">Files scanned</td><td>{{if .FileCount}}{{.FileCount}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Files scanned</td><td>{{if .FileCount}}{{.FileCount}}{{else}}0{{end}}</td></tr>
     <tr><td class="font-medium text-gray-700 pr-4">Skipped (scan)</td><td>{{if .ScanSkippedCount}}{{.ScanSkippedCount}}{{else}}—{{end}}</td></tr>
     <tr><td class="font-medium text-gray-700 pr-4">Hash started</td><td>{{if .HashStartedAt}}{{.HashStartedAt.Format "2006-01-02 15:04:05"}}{{else}}—{{end}}</td></tr>
     <tr><td class="font-medium text-gray-700 pr-4">Hash completed</td><td>{{if .HashCompletedAt}}{{.HashCompletedAt.Format "2006-01-02 15:04:05"}}{{else}}—{{end}}</td></tr>

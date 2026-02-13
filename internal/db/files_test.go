@@ -91,3 +91,40 @@ func TestGetFilesByScanID_multiple(t *testing.T) {
 		t.Errorf("want path /tmp/b in %v", paths)
 	}
 }
+
+func TestUpsertFilesBatch_InsertFileScanBatch(t *testing.T) {
+	database := TestPostgresDB(t)
+	ctx := context.Background()
+
+	folderID, _ := AddFolder(ctx, database, "/tmp")
+	scan, _ := CreateScan(ctx, database, folderID)
+	dev := int64(1)
+	rows := []FileRow{
+		{Path: "a", Size: 10, MTime: 100, Inode: 1, DeviceID: &dev},
+		{Path: "b", Size: 20, MTime: 200, Inode: 2, DeviceID: nil},
+	}
+	ids, err := UpsertFilesBatch(ctx, database, folderID, rows)
+	if err != nil {
+		t.Fatalf("UpsertFilesBatch: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("UpsertFilesBatch returned %d ids, want 2", len(ids))
+	}
+	if err := InsertFileScanBatch(ctx, database, ids, scan.ID); err != nil {
+		t.Fatalf("InsertFileScanBatch: %v", err)
+	}
+	files, err := GetFilesByScanID(ctx, database, scan.ID)
+	if err != nil {
+		t.Fatalf("GetFilesByScanID: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("GetFilesByScanID len = %d, want 2", len(files))
+	}
+	byPath := make(map[string]File)
+	for _, f := range files {
+		byPath[f.Path] = f
+	}
+	if byPath["/tmp/a"].Size != 10 || byPath["/tmp/b"].Size != 20 {
+		t.Errorf("batch insert sizes: a=%d b=%d", byPath["/tmp/a"].Size, byPath["/tmp/b"].Size)
+	}
+}

@@ -87,6 +87,15 @@ func UpdateScanCompletedAt(ctx context.Context, database *sql.DB, scanID int64, 
 	return err
 }
 
+// UpdateScanFileCountProgress sets file_count for a scan that is still running (completed_at IS NULL).
+// Used to show live progress in the UI; only updates when the scan is not yet completed.
+func UpdateScanFileCountProgress(ctx context.Context, database *sql.DB, scanID int64, fileCount int64) error {
+	_, err := database.ExecContext(ctx,
+		"UPDATE scans SET file_count = $1 WHERE id = $2 AND completed_at IS NULL",
+		fileCount, scanID)
+	return err
+}
+
 // UpdateScanHashStartedAt sets hash_started_at and clears hash completed/counts. Call at start of RunHashPhase.
 func UpdateScanHashStartedAt(ctx context.Context, database *sql.DB, scanID int64) error {
 	_, err := database.ExecContext(ctx,

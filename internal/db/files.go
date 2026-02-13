@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -42,6 +44,88 @@ func InsertFileScan(ctx context.Context, db *sql.DB, fileID, scanID int64) error
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO file_scan (file_id, scan_id) VALUES ($1, $2) ON CONFLICT (file_id, scan_id) DO NOTHING`,
 		fileID, scanID)
+	return err
+}
+
+// FileRow is a single file's metadata for batch insert. Path is relative to folder root.
+type FileRow struct {
+	Path     string
+	Size     int64
+	MTime    int64
+	Inode    int64
+	DeviceID *int64
+}
+
+// UpsertFilesBatch inserts or updates multiple files in one round-trip and returns their IDs in the same order.
+// Paths must be relative to the folder root. Empty slice returns nil, nil.
+func UpsertFilesBatch(ctx context.Context, database *sql.DB, folderID int64, rows []FileRow) ([]int64, error) {
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	// Build VALUES ($1..$6,'pending'), ($7..$12,'pending'), ... ON CONFLICT DO UPDATE RETURNING id
+	n := len(rows)
+	const colsPerRow = 6
+	placeholders := make([]string, n)
+	args := make([]interface{}, 0, n*colsPerRow)
+	for i := 0; i < n; i++ {
+		base := i * colsPerRow
+		placeholders[i] = fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,'pending')",
+			base+1, base+2, base+3, base+4, base+5, base+6)
+		r := &rows[i]
+		var dev interface{} = nil
+		if r.DeviceID != nil {
+			dev = *r.DeviceID
+		}
+		args = append(args, folderID, r.Path, r.Size, r.MTime, r.Inode, dev)
+	}
+	// #nosec G202 -- placeholders built from len(rows); all values passed as args
+	query := `INSERT INTO files (folder_id, path, size, mtime, inode, device_id, hash_status)
+		VALUES ` + strings.Join(placeholders, ", ") + `
+		ON CONFLICT (folder_id, path) DO UPDATE SET size = EXCLUDED.size, mtime = EXCLUDED.mtime, inode = EXCLUDED.inode, device_id = EXCLUDED.device_id
+		RETURNING id`
+	rowsResult, err := database.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rowsResult.Close()
+	ids := make([]int64, 0, n)
+	for rowsResult.Next() {
+		var id int64
+		if err := rowsResult.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rowsResult.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) != n {
+		return nil, fmt.Errorf("UpsertFilesBatch: got %d ids, want %d", len(ids), n)
+	}
+	return ids, nil
+}
+
+// InsertFileScanBatch links multiple files to a scan in one round-trip. Idempotent (ON CONFLICT DO NOTHING).
+func InsertFileScanBatch(ctx context.Context, database *sql.DB, fileIDs []int64, scanID int64) error {
+	if len(fileIDs) == 0 {
+		return nil
+	}
+	// VALUES ($1,$N), ($2,$N), ($3,$N), ... where N = len(fileIDs)+1
+	n := len(fileIDs)
+	args := make([]interface{}, 0, n+1)
+	for _, id := range fileIDs {
+		args = append(args, id)
+	}
+	args = append(args, scanID)
+	scanParam := n + 1
+	placeholders := make([]string, n)
+	for i := 0; i < n; i++ {
+		placeholders[i] = fmt.Sprintf("($%d,$%d)", i+1, scanParam)
+	}
+	// #nosec G202 -- placeholders built from len(fileIDs); all values passed as args
+	query := `INSERT INTO file_scan (file_id, scan_id) VALUES ` + strings.Join(placeholders, ", ") + `
+		ON CONFLICT (file_id, scan_id) DO NOTHING`
+	_, err := database.ExecContext(ctx, query, args...)
 	return err
 }
 
