@@ -7,12 +7,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 
 	"github.com/eargollo/ditto/internal/db"
 )
-
-const scanProgressLogInterval = 1000
 
 // ScanOptions configures a scan run.
 type ScanOptions struct {
@@ -21,7 +18,7 @@ type ScanOptions struct {
 }
 
 // RunScan walks rootPath, ensures a folder exists for it, creates a scan, upserts files and ledger rows, then sets the scan's completed_at.
-// rootPath must be an existing directory. Returns scanID or error.
+// Uses the parallel pipeline (multiple walkers, batched DB writers). rootPath must be an existing directory. Returns scanID or error.
 func RunScan(ctx context.Context, database *sql.DB, rootPath string, opts *ScanOptions) (int64, error) {
 	rootPath = filepath.Clean(rootPath)
 	info, err := os.Stat(rootPath)
@@ -48,48 +45,19 @@ func RunScan(ctx context.Context, database *sql.DB, rootPath string, opts *ScanO
 	}
 	scanID := s.ID
 
-	patterns := DefaultExcludePatterns()
-	if opts != nil && len(opts.ExcludePatterns) > 0 {
-		patterns = opts.ExcludePatterns
-	}
-	var maxFilesPerSecond int
-	if opts != nil {
-		maxFilesPerSecond = opts.MaxFilesPerSecond
-	}
-
-	var fileCount atomic.Int64
-	var stats ScanStats
-	var skippedScan int64
-	stats.SkippedScan = &skippedScan
-	err = Walk(ctx, rootPath, patterns, maxFilesPerSecond, &stats, func(e Entry) error {
-		relPath, err := filepath.Rel(folderPath, e.Path)
-		if err != nil {
-			relPath = e.Path
-		}
-		fileID, err := db.UpsertFile(ctx, database, folderID, relPath, e.Size, e.MTime, e.Inode, e.DeviceID)
-		if err != nil {
-			return err
-		}
-		if err := db.InsertFileScan(ctx, database, fileID, scanID); err != nil {
-			return err
-		}
-		n := fileCount.Add(1)
-		if n%scanProgressLogInterval == 0 {
-			log.Printf("[scan] %d files discovered (current: %s)", n, e.Path)
-		}
-		return nil
-	})
+	log.Printf("[scan] started for scan %d path %s (pipeline)", scanID, rootPath)
+	fileCount, skippedScan, _, err := RunPipeline(ctx, database, scanID, folderID, rootPath, folderPath, opts, nil)
 	if err != nil {
 		return 0, err
 	}
-
-	if err := db.UpdateScanCompletedAt(ctx, database, scanID, fileCount.Load(), skippedScan); err != nil {
+	if err := db.UpdateScanCompletedAt(ctx, database, scanID, fileCount, skippedScan); err != nil {
 		return 0, err
 	}
 	return scanID, nil
 }
 
 // RunScanForExisting walks rootPath and upserts files + ledger for the existing scan (scanID). Use when the scan row was already created.
+// Uses the parallel pipeline (multiple walkers, batched DB writers).
 func RunScanForExisting(ctx context.Context, database *sql.DB, scanID int64, folderID int64, rootPath string, opts *ScanOptions) error {
 	rootPath = filepath.Clean(rootPath)
 	info, err := os.Stat(rootPath)
@@ -105,38 +73,9 @@ func RunScanForExisting(ctx context.Context, database *sql.DB, scanID int64, fol
 	}
 	folderPath := folder.Path
 
-	patterns := DefaultExcludePatterns()
-	if opts != nil && len(opts.ExcludePatterns) > 0 {
-		patterns = opts.ExcludePatterns
-	}
-	var maxFilesPerSecond int
-	if opts != nil {
-		maxFilesPerSecond = opts.MaxFilesPerSecond
-	}
-	var fileCount atomic.Int64
-	var stats ScanStats
-	var skippedScan int64
-	stats.SkippedScan = &skippedScan
-	err = Walk(ctx, rootPath, patterns, maxFilesPerSecond, &stats, func(e Entry) error {
-		relPath, err := filepath.Rel(folderPath, e.Path)
-		if err != nil {
-			relPath = e.Path
-		}
-		fileID, err := db.UpsertFile(ctx, database, folderID, relPath, e.Size, e.MTime, e.Inode, e.DeviceID)
-		if err != nil {
-			return err
-		}
-		if err := db.InsertFileScan(ctx, database, fileID, scanID); err != nil {
-			return err
-		}
-		n := fileCount.Add(1)
-		if n%scanProgressLogInterval == 0 {
-			log.Printf("[scan] %d files discovered (current: %s)", n, e.Path)
-		}
-		return nil
-	})
+	fileCount, skippedScan, _, err := RunPipeline(ctx, database, scanID, folderID, rootPath, folderPath, opts, nil)
 	if err != nil {
 		return err
 	}
-	return db.UpdateScanCompletedAt(ctx, database, scanID, fileCount.Load(), skippedScan)
+	return db.UpdateScanCompletedAt(ctx, database, scanID, fileCount, skippedScan)
 }

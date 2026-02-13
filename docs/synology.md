@@ -36,8 +36,21 @@ Add the following:
 |-------------------|---------|--------------------------------------|
 | `DITTO_DATA_DIR`  | `/data` | Where the database and data are stored (use a mounted volume). |
 | `DITTO_PORT`      | `8080`  | Port the app listens on inside the container. |
+| `DATABASE_URL`    | (required) | PostgreSQL connection URL. Use a Postgres container or external DB. |
 | `PUID`            | (optional) | Your Synology user's UID. Set this (and `PGID`) when you mount a **host folder** for `/data` so the app runs as your user and can write without permission errors. Omit or leave default (1000) for a Docker **named** volume. |
 | `PGID`            | (optional) | Your Synology user's GID. Use together with `PUID`. |
+
+**Optional – scan pipeline (for NAS / low-resource):**  
+On Synology, the default scan pipeline (4 walkers, 2 writers) may use more CPU and memory than you want. You can tune it with:
+
+| Variable                 | Recommended (Synology) | Description |
+|--------------------------|-------------------------|-------------|
+| `DITTO_SCAN_WALKERS`     | `2`                     | Goroutines that list directories (default 4). |
+| `DITTO_SCAN_WRITERS`     | `1`                     | Goroutines that batch-write to the DB (default 2). |
+| `DITTO_SCAN_BATCH_SIZE`  | `250`                   | Max files per DB batch (default 500). |
+| `DITTO_SCAN_FILE_CHAN_CAP` | `500`                 | File channel buffer size (default 1000). |
+
+Example: set `DITTO_SCAN_WALKERS=2`, `DITTO_SCAN_WRITERS=1`, `DITTO_SCAN_BATCH_SIZE=250` in the container environment for a lighter scan load.
 
 **Finding your UID/GID on Synology:** SSH into the NAS and run `id` (e.g. `id admin`). You'll see e.g. `uid=1026(admin) gid=100(users)` — use `PUID=1026` and `PGID=100`. Then create a folder for Ditto data (e.g. `Docker/ditto/data`) owned by that user; the container will write to it when you mount it at `/data`.
 
