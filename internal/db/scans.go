@@ -105,6 +105,16 @@ func UpdateScanHashStartedAt(ctx context.Context, database *sql.DB, scanID int64
 	return err
 }
 
+// UpdateScanHashProgress sets hashed_file_count, hashed_byte_count, hash_reused_count, hash_error_count
+// for a scan whose hash phase is still running (hash_completed_at IS NULL). Used for live progress in the UI.
+func UpdateScanHashProgress(ctx context.Context, database *sql.DB, scanID int64, hashedFileCount, hashedByteCount, hashReusedCount, hashErrorCount int64) error {
+	_, err := database.ExecContext(ctx,
+		`UPDATE scans SET hashed_file_count = $1, hashed_byte_count = $2, hash_reused_count = $3, hash_error_count = $4
+		 WHERE id = $5 AND hash_completed_at IS NULL`,
+		hashedFileCount, hashedByteCount, hashReusedCount, hashErrorCount, scanID)
+	return err
+}
+
 // UpdateScanHashCompletedAt sets hash_completed_at and hash-phase counts for the scan.
 func UpdateScanHashCompletedAt(ctx context.Context, database *sql.DB, scanID int64, hashedFileCount, hashedByteCount, hashReusedCount, hashErrorCount int64) error {
 	_, err := database.ExecContext(ctx,

@@ -56,7 +56,7 @@ func MigratePostgres(db *sql.DB) error {
 			path TEXT NOT NULL,
 			size BIGINT NOT NULL,
 			mtime BIGINT NOT NULL,
-			inode BIGINT NOT NULL,
+			inode BIGINT,
 			device_id BIGINT,
 			hash TEXT,
 			hash_status TEXT NOT NULL DEFAULT 'pending',
@@ -81,6 +81,11 @@ func MigratePostgres(db *sql.DB) error {
 		if _, err := db.Exec(q); err != nil {
 			return err
 		}
+	}
+	// Allow inode to be NULL for existing DBs created with inode NOT NULL (no-op if already nullable).
+	if _, err := db.Exec("ALTER TABLE files ALTER COLUMN inode DROP NOT NULL"); err != nil {
+		// Column may already be nullable (new install); ignore.
+		_ = err
 	}
 	return nil
 }

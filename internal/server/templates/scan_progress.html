@@ -1,6 +1,9 @@
 {{define "scan-progress-content"}}
 <h1 class="text-2xl font-bold text-gray-900">Scan {{.ID}}</h1>
 <p class="text-gray-600 mt-1">Root: {{.RootPath}}</p>
+<p class="mt-2">
+  <a href="/scans/{{.ID}}/export" download="scan-{{.ID}}-files.csv" class="text-blue-600 hover:underline">Download CSV (all files and hashes)</a>
+</p>
 <div id="scan-status"
   hx-get="/scans/{{.ID}}/status"
   hx-trigger="load, every 2s"
@@ -26,8 +29,11 @@
     <tr><td class="font-medium text-gray-700 pr-4">Skipped (hash)</td><td>{{if .HashErrorCount}}{{.HashErrorCount}}{{else}}—{{end}}</td></tr>
     <tr><td class="font-medium text-gray-700 pr-4">Hashed bytes</td><td>{{if .HashedByteCount}}{{.HashedByteCount}}{{else}}—{{end}}</td></tr>
   </table>
-  {{if and .CompletedAt .HashCompletedAt}}
-  <p class="mt-2"><a href="/scans/{{.ID}}/duplicates" class="text-blue-600 hover:underline">View duplicates</a></p>
-  {{end}}
+  <p class="mt-2 flex gap-4">
+    <a href="/scans/{{.ID}}/export" download="scan-{{.ID}}-files.csv" class="text-blue-600 hover:underline">Download CSV</a>
+    {{if and .CompletedAt .HashCompletedAt}}
+    <a href="/scans/{{.ID}}/duplicates" class="text-blue-600 hover:underline">View duplicates</a>
+    {{end}}
+  </p>
 </div>
 {{end}}

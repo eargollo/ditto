@@ -460,11 +460,16 @@ func runWriter(ctx context.Context, database *sql.DB, folderID, scanID int64, fo
 			if err != nil {
 				relPath = e.Path
 			}
+			var inodePtr *int64
+			if e.Inode != InvalidInode {
+				v := e.Inode
+				inodePtr = &v
+			}
 			rows[i] = db.FileRow{
 				Path:     relPath,
 				Size:     e.Size,
 				MTime:    e.MTime,
-				Inode:    e.Inode,
+				Inode:    inodePtr,
 				DeviceID: e.DeviceID,
 			}
 		}

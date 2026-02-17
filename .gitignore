@@ -1,3 +1,4 @@
 /ditto
+tmp/
 *.db
 *.log

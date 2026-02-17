@@ -18,9 +18,9 @@ func TestDuplicateGroupsByHash_and_FilesInHashGroup(t *testing.T) {
 	if scan == nil {
 		t.Fatal("CreateScan: got nil scan")
 	}
-	fileID1, _ := UpsertFile(ctx, db, folderID, "a", 100, 0, 1, nil)
+	fileID1, _ := UpsertFile(ctx, db, folderID, "a", 100, 0, ptrInt64(1), nil)
 	InsertFileScan(ctx, db, fileID1, scan.ID)
-	fileID2, _ := UpsertFile(ctx, db, folderID, "b", 100, 0, 2, nil)
+	fileID2, _ := UpsertFile(ctx, db, folderID, "b", 100, 0, ptrInt64(2), nil)
 	InsertFileScan(ctx, db, fileID2, scan.ID)
 	hash := "abc123"
 	now := time.Now().UTC()
@@ -75,7 +75,7 @@ func TestDuplicateGroupsByHashAcrossScans(t *testing.T) {
 		{folder2ID, "c", 50, 3},
 		{folder2ID, "d", 50, 4},
 	} {
-		fileID, _ := UpsertFile(ctx, db, pair.folderID, pair.path, pair.size, 0, pair.inode, nil)
+		fileID, _ := UpsertFile(ctx, db, pair.folderID, pair.path, pair.size, 0, ptrInt64(pair.inode), nil)
 		if pair.folderID == folder1ID {
 			InsertFileScan(ctx, db, fileID, scan1.ID)
 		} else {

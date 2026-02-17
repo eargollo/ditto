@@ -184,7 +184,7 @@ func DuplicateGroupsByInode(ctx context.Context, database *sql.DB, scanID int64)
 	rows, err := database.QueryContext(ctx,
 		`SELECT f.inode, f.device_id, COUNT(*), COALESCE(SUM(f.size), 0) FROM files f
 		 JOIN file_scan fs ON f.id = fs.file_id
-		 WHERE fs.scan_id = $1
+		 WHERE fs.scan_id = $1 AND f.inode IS NOT NULL
 		 GROUP BY f.inode, COALESCE(f.device_id, -999)
 		 HAVING COUNT(*) > 1
 		 ORDER BY COUNT(*) DESC`,
@@ -264,11 +264,16 @@ func scanFiles(rows *sql.Rows) ([]File, error) {
 	var files []File
 	for rows.Next() {
 		var f File
+		var inode sql.NullInt64
 		var deviceID sql.NullInt64
 		var hash sql.NullString
 		var hashedAt nullRFC3339Time
-		if err := rows.Scan(&f.ID, &f.ScanID, &f.Path, &f.Size, &f.MTime, &f.Inode, &deviceID, &hash, &f.HashStatus, &hashedAt); err != nil {
+		if err := rows.Scan(&f.ID, &f.ScanID, &f.Path, &f.Size, &f.MTime, &inode, &deviceID, &hash, &f.HashStatus, &hashedAt); err != nil {
 			return nil, err
+		}
+		if inode.Valid {
+			v := inode.Int64
+			f.Inode = &v
 		}
 		if deviceID.Valid {
 			v := deviceID.Int64
