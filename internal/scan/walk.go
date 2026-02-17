@@ -4,14 +4,16 @@ import (
 	"context"
 	"io/fs"
 	"log"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"golang.org/x/time/rate"
 )
+
+// InvalidInode is the value used when the OS does not provide an inode (e.g. Windows) or we cannot read it.
+// It is not a valid inode; files with this value must not be treated as the same file for hash reuse.
+const InvalidInode = -1
 
 // DebugScanEnv is the name of the env var that enables directory logging to find hang locations.
 // When set (e.g. DITTO_DEBUG_SCAN=1), we log each directory we're about to list; if the scan hangs,
@@ -95,7 +97,7 @@ func Walk(ctx context.Context, root string, excludePatterns []string, maxFilesPe
 		}
 		inode, dev := inodeAndDev(info)
 		var deviceID *int64
-		if dev != 0 {
+		if inode != InvalidInode && dev != InvalidInode && dev != 0 {
 			deviceID = &dev
 		}
 		e := Entry{
@@ -130,35 +132,4 @@ func isPermissionOrAccessError(err error) bool {
 	return strings.Contains(msg, "operation not permitted") ||
 		strings.Contains(msg, "permission denied") ||
 		strings.Contains(msg, "Permission denied")
-}
-
-func inodeAndDev(info os.FileInfo) (inode, dev int64) {
-	sys := info.Sys()
-	if sys == nil {
-		return 0, 0
-	}
-	if st, ok := sys.(*syscall.Stat_t); ok {
-		return statTToInt64(any(st.Ino)), statTToInt64(any(st.Dev))
-	}
-	return 0, 0
-}
-
-// statTToInt64 converts Stat_t Ino/Dev to int64 without overflow (type varies by OS: uint64, int32, etc.).
-func statTToInt64(v interface{}) int64 {
-	switch x := v.(type) {
-	case uint64:
-		if x > math.MaxInt64 {
-			return 0
-		}
-		return int64(x)
-	case int32:
-		return int64(x)
-	case uint32:
-		if x > math.MaxInt32 {
-			return 0
-		}
-		return int64(x)
-	default:
-		return 0
-	}
 }

@@ -92,6 +92,25 @@ In the UI, add scan root **`/scan/Photos`**. For more detail (permissions, troub
 | `DITTO_PORT`      | `8080`    | HTTP port for the web UI.     |
 | `PUID` / `PGID`   | `1000` / `1000` | (Docker only) Run the app as this user. On Synology, set to your DSM user's UID/GID when you mount a **host folder** for `/data` so the app can write to it. Use `id youruser` on the NAS to get the values. |
 
+## Reference mode (validating correctness)
+
+You can run a **serial, in-memory** pass over a directory (no database) that produces the same CSV format as the service export. Use it to validate the full pipeline on real data (e.g. on Synology):
+
+1. Run the reference on the same root you will scan in the UI:
+   ```bash
+   ./ditto reference -o ref.csv /volume1/video
+   ```
+2. Start the service, add that root, run a scan and hash, then download the scan CSV from the scan details page.
+3. Compare the two CSVs (e.g. sort both by path and diff). They should match (path, hash, size).
+
+Reference uses the same exclude rules as the service and only hashes **duplicate candidates** (files whose size appears at least twice), so the CSV matches the service export. Inode reuse (hardlinks) is applied. No `DATABASE_URL` or server is required.
+
+```bash
+./ditto reference [-o output.csv] [-stats stats.csv] <root>
+# -o      write CSV to file (default: stdout)
+# -stats  write stats CSV (file_count, hashed_file_count, walk_duration_sec, etc.) for comparing reference vs service speed
+```
+
 ## Documentation
 
 - **[Running on Synology](docs/synology.md)** — Deploy Ditto on a Synology NAS with Container Manager (Docker): image, volumes, env, and scan roots.

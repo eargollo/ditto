@@ -15,9 +15,11 @@ import (
 )
 
 const hashProgressLogInterval = 50   // log "N/M files" every this many files
+const hashProgressUpdateInterval = 2 * time.Second // write hash stats to DB for live UI progress (same as scan)
 const slowOpThreshold = 100 * time.Millisecond // log when a single DB op exceeds this (for investigation)
 const hashJobChannelCap = 1000       // bounded channel for producer-consumer; backpressure if consumers are slow
 const fileLogInterval = 5 * time.Second // at most one per-file log line every this long (avoid flooding)
+const hashBatchSize = 50              // flush hash updates to DB in batches to reduce round-trips (e.g. on NAS)
 
 func logSlowIf(op string, start time.Time) {
 	if d := time.Since(start); d > slowOpThreshold {
@@ -89,13 +91,39 @@ func RunHashPhase(ctx context.Context, database *sql.DB, scanID int64, opts *Has
 	return db.UpdateScanHashCompletedAt(ctx, database, scanID, fileCount, byteCount, reusedCount.Load(), hashErrorCount.Load())
 }
 
-// runHashPhaseProducerConsumer: one producer sends pending jobs (from a single SELECT) to a bounded channel;
-// N consumers process jobs and update the DB. Producer closes channel when done; consumers exit when channel is closed.
+// runHashProgressUpdater writes hashed_file_count, hashed_byte_count, hash_reused_count, hash_error_count
+// to the scan row periodically so the UI shows live progress. Exits when progressDone is closed or ctx is cancelled.
+func runHashProgressUpdater(ctx context.Context, database *sql.DB, scanID int64, progressDone <-chan struct{}, reusedCount, hashErrorCount *atomic.Int64) {
+	ticker := time.NewTicker(hashProgressUpdateInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-progressDone:
+			return
+		case <-ticker.C:
+			fileCount, byteCount, err := db.GetHashedFileCountAndBytes(ctx, database, scanID)
+			if err != nil {
+				continue
+			}
+			_ = db.UpdateScanHashProgress(ctx, database, scanID, fileCount, byteCount, reusedCount.Load(), hashErrorCount.Load())
+		}
+	}
+}
+
+// runHashPhaseProducerConsumer: one producer sends pending jobs to a bounded channel;
+// N consumers process jobs and send hash results to a batch writer; writer flushes to DB in batches.
 func runHashPhaseProducerConsumer(ctx context.Context, database *sql.DB, scanID int64, total int64, completed, reusedCount, hashErrorCount *atomic.Int64, phaseStart time.Time, opts *HashOptions, numWorkers int) error {
 	jobs := make(chan *db.File, hashJobChannelCap)
-	errCh := make(chan error, 1) // first error from producer or any consumer
+	results := make(chan db.HashUpdate, hashJobChannelCap)
+	errCh := make(chan error, 1)
+	progressDone := make(chan struct{})
 
-	// Producer: stream pending jobs from one query into the channel; close when done or on error.
+	// Live progress: update scan row periodically so the UI shows hash stats (like scan file_count).
+	go runHashProgressUpdater(ctx, database, scanID, progressDone, reusedCount, hashErrorCount)
+
+	// Producer: stream pending jobs; close when done.
 	go func() {
 		defer close(jobs)
 		err := db.ForEachPendingHashJob(ctx, database, scanID, func(f *db.File) error {
@@ -114,13 +142,51 @@ func runHashPhaseProducerConsumer(ctx context.Context, database *sql.DB, scanID 
 		}
 	}()
 
-	// Consumers: read from channel until closed; process each job.
-	var wg sync.WaitGroup
+	// Batch writer: collect hash updates and flush in batches to reduce DB round-trips (e.g. on NAS).
+	var writerWg sync.WaitGroup
+	writerWg.Add(1)
+	go func() {
+		defer writerWg.Done()
+		var batch []db.HashUpdate
+		flush := func() {
+			if len(batch) == 0 {
+				return
+			}
+			t0 := time.Now()
+			if err := db.UpdateFileHashBatch(ctx, database, batch); err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				return
+			}
+			logSlowIf("UpdateFileHashBatch", t0)
+			batch = nil
+		}
+		for {
+			select {
+			case r, ok := <-results:
+				if !ok {
+					flush()
+					return
+				}
+				batch = append(batch, r)
+				if len(batch) >= hashBatchSize {
+					flush()
+				}
+			case <-ctx.Done():
+				flush()
+				return
+			}
+		}
+	}()
+
 	now := time.Now().UTC()
 	var limiter *rate.Limiter
 	if opts != nil && opts.MaxHashesPerSecond > 0 {
 		limiter = rate.NewLimiter(rate.Limit(opts.MaxHashesPerSecond), 1)
 	}
+	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go func() {
@@ -129,12 +195,12 @@ func runHashPhaseProducerConsumer(ctx context.Context, database *sql.DB, scanID 
 				if ctx.Err() != nil {
 					return
 				}
-				reused, err := processClaimedJob(ctx, database, job, opts, now, limiter)
+				reused, update, err := processClaimedJob(ctx, database, job, opts, now, limiter)
 				if err != nil {
 					if hashErrorCount != nil {
 						hashErrorCount.Add(1)
 					}
-					_ = db.ResetFileHashStatusToPending(ctx, database, job.ID) // return to queue so it can be retried
+					_ = db.ResetFileHashStatusToPending(ctx, database, job.ID)
 					select {
 					case errCh <- err:
 					default:
@@ -144,12 +210,21 @@ func runHashPhaseProducerConsumer(ctx context.Context, database *sql.DB, scanID 
 				if reused && reusedCount != nil {
 					reusedCount.Add(1)
 				}
+				select {
+				case results <- *update:
+				case <-ctx.Done():
+					return
+				}
 				progressLog(completed, total, phaseStart)
 			}
 		}()
 	}
 
 	wg.Wait()
+	close(results)
+	writerWg.Wait()
+	close(progressDone)
+
 	select {
 	case runErr := <-errCh:
 		return runErr
@@ -158,53 +233,44 @@ func runHashPhaseProducerConsumer(ctx context.Context, database *sql.DB, scanID 
 	}
 }
 
-// processClaimedJob hashes the file (or reuses inode/previous hash). Returns (reused, nil) on success, (false, err) on error.
-func processClaimedJob(ctx context.Context, database *sql.DB, job *db.File, opts *HashOptions, now time.Time, limiter *rate.Limiter) (reused bool, err error) {
+// processClaimedJob hashes the file (or reuses inode/previous hash). Returns (reused, update, nil) on success; update is sent to batch writer.
+func processClaimedJob(ctx context.Context, database *sql.DB, job *db.File, opts *HashOptions, now time.Time, limiter *rate.Limiter) (reused bool, update *db.HashUpdate, err error) {
 	// Same-scan inode reuse (hardlink)
 	t0 := time.Now()
 	h, err := db.HashForInode(ctx, database, job.ScanID, job.Inode, job.DeviceID)
 	logSlowIf("HashForInode", t0)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if h != "" {
 		logFileIfThrottled("[hash] reused (inode) %s [%s]", job.Path, filepath.Base(job.Path))
-		t1 := time.Now()
-		err := db.UpdateFileHash(ctx, database, job.ID, h, now)
-		logSlowIf("UpdateFileHash", t1)
-		return true, err
+		return true, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now}, nil
 	}
 	// Previous-scan unchanged file reuse
 	t2 := time.Now()
 	h, err = db.HashForInodeFromPreviousScan(ctx, database, job.ScanID, job.Inode, job.DeviceID, job.Size)
 	logSlowIf("HashForInodeFromPreviousScan", t2)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if h != "" {
 		logFileIfThrottled("[hash] reused (unchanged) %s [%s]", job.Path, filepath.Base(job.Path))
-		t3 := time.Now()
-		err := db.UpdateFileHash(ctx, database, job.ID, h, now)
-		logSlowIf("UpdateFileHash", t3)
-		return true, err
+		return true, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now}, nil
 	}
-	// Throttle before reading (Step 6)
+	// Throttle before reading
 	if limiter != nil {
 		if err := limiter.Wait(ctx); err != nil {
-			return false, err
+			return false, nil, err
 		}
 	}
 	logFileIfThrottled("[hash] hashing %s [%s] (%d bytes)", job.Path, filepath.Base(job.Path), job.Size)
 	h, err = HashFile(job.Path)
 	if err != nil {
 		logFileIfThrottled("[hash] failed %s [%s]: %v", job.Path, filepath.Base(job.Path), err)
-		return false, err
+		return false, nil, err
 	}
 	logFileIfThrottled("[hash] hashed %s [%s]", job.Path, filepath.Base(job.Path))
-	t4 := time.Now()
-	err = db.UpdateFileHash(ctx, database, job.ID, h, now)
-	logSlowIf("UpdateFileHash", t4)
-	return false, err
+	return false, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now}, nil
 }
 
 // progressLog logs "N/M files (X%)" and optionally ETA every hashProgressLogInterval or when done.

@@ -5,11 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/csv"
 	"encoding/json"
 	"html/template"
 	"io/fs"
 	"log"
 	"net/http"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -84,6 +87,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /scans/{id}/duplicates/hash/{hash}", s.handleDuplicateHashGroup())
 	s.mux.HandleFunc("GET /scans/{id}/duplicates/inode", s.handleDuplicateInodeGroup())
 	s.mux.HandleFunc("GET /scans/{id}/duplicates", s.handleDuplicates())
+	s.mux.HandleFunc("GET /scans/{id}/export", s.handleScanExport())
 	s.mux.HandleFunc("GET /scans/{id}", s.handleScanProgress())
 	s.mux.HandleFunc("GET /api/fragment", s.handleFragment())
 	s.mux.HandleFunc("GET /health", s.handleHealth())
@@ -445,6 +449,60 @@ func (s *Server) handleScanStatus() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		_, _ = w.Write(buf.Bytes())
+	}
+}
+
+func (s *Server) handleScanExport() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		idStr := r.PathValue("id")
+		if idStr == "" {
+			http.Error(w, "id required", http.StatusBadRequest)
+			return
+		}
+		scanID, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		ctx := r.Context()
+		if _, err := db.GetScan(ctx, s.dbForRead(), scanID); err != nil {
+			http.Error(w, "scan not found", http.StatusNotFound)
+			return
+		}
+		files, err := db.GetFilesByScanID(ctx, s.dbForRead(), scanID)
+		if err != nil {
+			log.Printf("error: export scan %d: %v", scanID, err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+		var buf bytes.Buffer
+		cw := csv.NewWriter(&buf)
+		if err := cw.Write([]string{"path", "hash", "size"}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, f := range files {
+			hashVal := ""
+			if f.Hash != nil {
+				hashVal = *f.Hash
+			}
+			// Normalize to forward slashes so CSV is comparable across OS (e.g. export on Linux vs reference on Windows).
+			if err := cw.Write([]string{filepath.ToSlash(f.Path), hashVal, strconv.FormatInt(f.Size, 10)}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		cw.Flush()
+		if err := cw.Error(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="scan-`+idStr+`-files.csv"`)
+		// UTF-8 BOM so Excel and similar tools open the file with correct encoding
+		_, _ = w.Write([]byte("\xef\xbb\xbf"))
 		_, _ = w.Write(buf.Bytes())
 	}
 }

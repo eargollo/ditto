@@ -5,11 +5,13 @@ import (
 	"database/sql"
 )
 
-// sizeCandidateSubquery returns a SQL fragment (single line) that selects sizes for which we should hash:
+// sizeCandidateSubquery returns a SQL fragment that selects sizes for which we should hash:
 // - same size appears more than once in the current scan, OR
 // - same size as any already-hashed file (any scan), OR
-// - same size as any file in another scan (cross-folder duplicates when size is unique per scan).
+// - same size as any file in another scan (cross-folder duplicates).
 // Parameter $1 = current scan_id.
+// We only ever select files with hash_status = 'pending' (see pendingHashJobsQuery / ClaimNextHashJob),
+// so the same file (same id) from a previous scan is never re-hashed (upsert preserves hash_status).
 const sizeCandidateSubquery = `
 		SELECT f2.size FROM files f2 JOIN file_scan fs2 ON f2.id = fs2.file_id WHERE fs2.scan_id = $1 GROUP BY f2.size HAVING COUNT(*) > 1
 		UNION
@@ -45,11 +47,16 @@ func ForEachPendingHashJob(ctx context.Context, database *sql.DB, scanID int64, 
 	defer rows.Close()
 	for rows.Next() {
 		var f File
+		var inode sql.NullInt64
 		var deviceID sql.NullInt64
 		var hash sql.NullString
 		var hashedAt nullRFC3339Time
-		if err := rows.Scan(&f.ID, &f.ScanID, &f.Path, &f.Size, &f.MTime, &f.Inode, &deviceID, &hash, &f.HashStatus, &hashedAt); err != nil {
+		if err := rows.Scan(&f.ID, &f.ScanID, &f.Path, &f.Size, &f.MTime, &inode, &deviceID, &hash, &f.HashStatus, &hashedAt); err != nil {
 			return err
+		}
+		if inode.Valid {
+			v := inode.Int64
+			f.Inode = &v
 		}
 		if deviceID.Valid {
 			v := deviceID.Int64
@@ -94,11 +101,16 @@ func ClaimNextHashJob(ctx context.Context, db *sql.DB, scanID int64) (*File, err
 		 FROM files f JOIN folders fo ON f.folder_id = fo.id WHERE f.id = $1`,
 		fileID, scanID)
 	var f File
+	var inode sql.NullInt64
 	var deviceID sql.NullInt64
 	var hash sql.NullString
 	var hashedAt nullRFC3339Time
-	if err := row.Scan(&f.ID, &f.ScanID, &f.Path, &f.Size, &f.MTime, &f.Inode, &deviceID, &hash, &f.HashStatus, &hashedAt); err != nil {
+	if err := row.Scan(&f.ID, &f.ScanID, &f.Path, &f.Size, &f.MTime, &inode, &deviceID, &hash, &f.HashStatus, &hashedAt); err != nil {
 		return nil, err
+	}
+	if inode.Valid {
+		v := inode.Int64
+		f.Inode = &v
 	}
 	if deviceID.Valid {
 		v := deviceID.Int64

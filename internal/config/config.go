@@ -58,7 +58,7 @@ func Load() (*Config, error) {
 	return &Config{dataDir: dataDir, port: port, databaseURL: databaseURL}, nil
 }
 
-// DataDir returns the path to the data directory (for SQLite DB and other persistent data).
+// DataDir returns the path to the data directory (optional app data; the database lives in Postgres).
 func (c *Config) DataDir() string {
 	return c.dataDir
 }

@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/csv"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"syscall"
 
 	"github.com/eargollo/ditto/internal/config"
@@ -16,6 +21,12 @@ import (
 )
 
 func main() {
+	// Reference mode: serial, in-memory, no DB. Never loads config or DATABASE_URL.
+	if len(os.Args) >= 2 && os.Args[1] == "reference" {
+		runReference()
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
@@ -57,6 +68,73 @@ func main() {
 	log.Printf("Web UI at http://localhost:%d", cfg.Port())
 	if err := srv.Run(ctx); err != nil {
 		log.Fatalf("server: %v", err)
+	}
+}
+
+func runReference() {
+	refFlags := flag.NewFlagSet("reference", flag.ExitOnError)
+	outPath := refFlags.String("o", "", "output CSV path (default stdout)")
+	statsPath := refFlags.String("stats", "", "output stats CSV path (same fields as DB scan row)")
+	_ = refFlags.Parse(os.Args[2:])
+	args := refFlags.Args()
+	if len(args) < 1 {
+		log.Fatal("usage: ditto reference [-o output.csv] [-stats stats.csv] <root>\n  (no DATABASE_URL or server required)")
+	}
+	root := filepath.Clean(args[0])
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		if err != nil {
+			log.Fatalf("reference: %v", err)
+		}
+		log.Fatalf("reference: %s is not a directory", root)
+	}
+	opts, err := scan.OptionsForRoot(root)
+	if err != nil {
+		log.Fatalf("reference exclude: %v", err)
+	}
+	log.Printf("[reference] walking %s (serial, in-memory, only hash duplicate candidates)", root)
+	progress := func(phase string, current, total int64) {
+		if total < 0 {
+			log.Printf("[reference] %s: %d files", phase, current)
+		} else {
+			log.Printf("[reference] %s: %d/%d files (%.0f%%)", phase, current, total, 100*float64(current)/float64(total))
+		}
+	}
+	csvBytes, refStats, err := scan.ReferenceCSV(context.Background(), root, opts.ExcludePatterns, progress)
+	if err != nil {
+		log.Fatalf("reference: %v", err)
+	}
+	if refStats != nil {
+		log.Printf("[reference] files=%d skipped=%d hashed=%d hashed_bytes=%d reused=%d errors=%d walk_sec=%.1f hash_sec=%.1f",
+			refStats.FileCount, refStats.ScanSkippedCount, refStats.HashedFileCount, refStats.HashedByteCount,
+			refStats.HashReusedCount, refStats.HashErrorCount, refStats.WalkDurationSec, refStats.HashDurationSec)
+	}
+	if *outPath == "" {
+		_, _ = os.Stdout.Write(csvBytes)
+	} else {
+		if err := os.WriteFile(*outPath, csvBytes, 0600); err != nil {
+			log.Fatalf("reference write: %v", err)
+		}
+		log.Printf("[reference] wrote %d bytes to %s", len(csvBytes), *outPath)
+	}
+	if *statsPath != "" && refStats != nil {
+		var buf bytes.Buffer
+		w := csv.NewWriter(&buf)
+		_ = w.Write([]string{"file_count", "scan_skipped_count", "hashed_file_count", "hashed_byte_count", "hash_reused_count", "hash_error_count", "walk_duration_sec", "hash_duration_sec"})
+		_ = w.Write([]string{
+			strconv.FormatInt(refStats.FileCount, 10),
+			strconv.FormatInt(refStats.ScanSkippedCount, 10),
+			strconv.FormatInt(refStats.HashedFileCount, 10),
+			strconv.FormatInt(refStats.HashedByteCount, 10),
+			strconv.FormatInt(refStats.HashReusedCount, 10),
+			strconv.FormatInt(refStats.HashErrorCount, 10),
+			strconv.FormatFloat(refStats.WalkDurationSec, 'f', -1, 64),
+			strconv.FormatFloat(refStats.HashDurationSec, 'f', -1, 64),
+		})
+		w.Flush()
+		if err := os.WriteFile(*statsPath, buf.Bytes(), 0600); err != nil {
+			log.Fatalf("reference stats write: %v", err)
+		}
+		log.Printf("[reference] wrote stats to %s", *statsPath)
 	}
 }
 

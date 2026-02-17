@@ -16,7 +16,7 @@ type File struct {
 	Path       string  // relative to folder in DB; full path when selected with folder path for display
 	Size       int64
 	MTime      int64
-	Inode      int64
+	Inode      *int64
 	DeviceID   *int64
 	Hash       *string
 	HashStatus string
@@ -24,10 +24,13 @@ type File struct {
 }
 
 // UpsertFile inserts or updates a file by (folder_id, path) and returns the file id. Path must be relative to the folder root.
-func UpsertFile(ctx context.Context, db *sql.DB, folderID int64, path string, size, mtime, inode int64, deviceID *int64) (int64, error) {
-	var deviceVal interface{} = nil
+func UpsertFile(ctx context.Context, db *sql.DB, folderID int64, path string, size, mtime int64, inode *int64, deviceID *int64) (int64, error) {
+	var deviceVal, inodeVal interface{} = nil, nil
 	if deviceID != nil {
 		deviceVal = *deviceID
+	}
+	if inode != nil {
+		inodeVal = *inode
 	}
 	var id int64
 	err := db.QueryRowContext(ctx,
@@ -35,7 +38,7 @@ func UpsertFile(ctx context.Context, db *sql.DB, folderID int64, path string, si
 		 VALUES ($1, $2, $3, $4, $5, $6, 'pending')
 		 ON CONFLICT (folder_id, path) DO UPDATE SET size = EXCLUDED.size, mtime = EXCLUDED.mtime, inode = EXCLUDED.inode, device_id = EXCLUDED.device_id
 		 RETURNING id`,
-		folderID, path, size, mtime, inode, deviceVal).Scan(&id)
+		folderID, path, size, mtime, inodeVal, deviceVal).Scan(&id)
 	return id, err
 }
 
@@ -47,12 +50,12 @@ func InsertFileScan(ctx context.Context, db *sql.DB, fileID, scanID int64) error
 	return err
 }
 
-// FileRow is a single file's metadata for batch insert. Path is relative to folder root.
+// FileRow is a single file's metadata for batch insert. Path is relative to folder root. Inode may be nil when unknown.
 type FileRow struct {
 	Path     string
 	Size     int64
 	MTime    int64
-	Inode    int64
+	Inode    *int64
 	DeviceID *int64
 }
 
@@ -72,11 +75,14 @@ func UpsertFilesBatch(ctx context.Context, database *sql.DB, folderID int64, row
 		placeholders[i] = fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,'pending')",
 			base+1, base+2, base+3, base+4, base+5, base+6)
 		r := &rows[i]
-		var dev interface{} = nil
+		var dev, inodeVal interface{} = nil, nil
 		if r.DeviceID != nil {
 			dev = *r.DeviceID
 		}
-		args = append(args, folderID, r.Path, r.Size, r.MTime, r.Inode, dev)
+		if r.Inode != nil {
+			inodeVal = *r.Inode
+		}
+		args = append(args, folderID, r.Path, r.Size, r.MTime, inodeVal, dev)
 	}
 	// #nosec G202 -- placeholders built from len(rows); all values passed as args
 	query := `INSERT INTO files (folder_id, path, size, mtime, inode, device_id, hash_status)

@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+func ptrInt64(n int64) *int64 { v := n; return &v }
+
 func TestUpsertFile_InsertFileScan_and_GetFilesByScanID(t *testing.T) {
 	db := TestPostgresDB(t)
 	ctx := context.Background()
@@ -12,7 +14,7 @@ func TestUpsertFile_InsertFileScan_and_GetFilesByScanID(t *testing.T) {
 	folderID, _ := AddFolder(ctx, db, "/tmp")
 	scan, _ := CreateScan(ctx, db, folderID)
 	deviceID := int64(42)
-	fileID, err := UpsertFile(ctx, db, folderID, "foo", 100, 1707292800, 12345, &deviceID)
+	fileID, err := UpsertFile(ctx, db, folderID, "foo", 100, 1707292800, ptrInt64(12345), &deviceID)
 	if err != nil {
 		t.Fatalf("UpsertFile: %v", err)
 	}
@@ -28,8 +30,8 @@ func TestUpsertFile_InsertFileScan_and_GetFilesByScanID(t *testing.T) {
 		t.Fatalf("GetFilesByScanID len = %d, want 1", len(files))
 	}
 	f := files[0]
-	if f.Size != 100 || f.MTime != 1707292800 || f.Inode != 12345 {
-		t.Errorf("file: size=%d mtime=%d inode=%d", f.Size, f.MTime, f.Inode)
+	if f.Size != 100 || f.MTime != 1707292800 || f.Inode == nil || *f.Inode != 12345 {
+		t.Errorf("file: size=%d mtime=%d inode=%v", f.Size, f.MTime, f.Inode)
 	}
 	if f.HashStatus != "pending" {
 		t.Errorf("hash_status = %q, want pending", f.HashStatus)
@@ -67,9 +69,9 @@ func TestGetFilesByScanID_multiple(t *testing.T) {
 
 	folderID, _ := AddFolder(ctx, db, "/tmp")
 	scan, _ := CreateScan(ctx, db, folderID)
-	fileID1, _ := UpsertFile(ctx, db, folderID, "a", 10, 100, 1, nil)
+	fileID1, _ := UpsertFile(ctx, db, folderID, "a", 10, 100, ptrInt64(1), nil)
 	InsertFileScan(ctx, db, fileID1, scan.ID)
-	fileID2, _ := UpsertFile(ctx, db, folderID, "b", 20, 200, 2, nil)
+	fileID2, _ := UpsertFile(ctx, db, folderID, "b", 20, 200, ptrInt64(2), nil)
 	InsertFileScan(ctx, db, fileID2, scan.ID)
 
 	files, err := GetFilesByScanID(ctx, db, scan.ID)
@@ -100,8 +102,8 @@ func TestUpsertFilesBatch_InsertFileScanBatch(t *testing.T) {
 	scan, _ := CreateScan(ctx, database, folderID)
 	dev := int64(1)
 	rows := []FileRow{
-		{Path: "a", Size: 10, MTime: 100, Inode: 1, DeviceID: &dev},
-		{Path: "b", Size: 20, MTime: 200, Inode: 2, DeviceID: nil},
+		{Path: "a", Size: 10, MTime: 100, Inode: ptrInt64(1), DeviceID: &dev},
+		{Path: "b", Size: 20, MTime: 200, Inode: ptrInt64(2), DeviceID: nil},
 	}
 	ids, err := UpsertFilesBatch(ctx, database, folderID, rows)
 	if err != nil {

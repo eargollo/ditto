@@ -34,11 +34,10 @@ Add the following:
 
 | Variable          | Value   | Description                          |
 |-------------------|---------|--------------------------------------|
-| `DITTO_DATA_DIR`  | `/data` | Where the database and data are stored (use a mounted volume). |
 | `DITTO_PORT`      | `8080`  | Port the app listens on inside the container. |
-| `DATABASE_URL`    | (required) | PostgreSQL connection URL. Use a Postgres container or external DB. |
-| `PUID`            | (optional) | Your Synology user's UID. Set this (and `PGID`) when you mount a **host folder** for `/data` so the app runs as your user and can write without permission errors. Omit or leave default (1000) for a Docker **named** volume. |
-| `PGID`            | (optional) | Your Synology user's GID. Use together with `PUID`. |
+| `DATABASE_URL`    | (required) | PostgreSQL connection URL. All Ditto state (folders, scans, files) is stored in Postgres. |
+| `DITTO_DATA_DIR`  | (optional) | Local app data directory; default `./data`. Not used for the database. You can omit it in Docker. |
+| `PUID` / `PGID`   | (optional) | Override container user when needed for volume permissions (e.g. scan folders). |
 
 **Optional – scan pipeline (for NAS / low-resource):**  
 On Synology, the default scan pipeline (4 walkers, 2 writers) may use more CPU and memory than you want. You can tune it with:
@@ -52,14 +51,12 @@ On Synology, the default scan pipeline (4 walkers, 2 writers) may use more CPU a
 
 Example: set `DITTO_SCAN_WALKERS=2`, `DITTO_SCAN_WRITERS=1`, `DITTO_SCAN_BATCH_SIZE=250` in the container environment for a lighter scan load.
 
-**Finding your UID/GID on Synology:** SSH into the NAS and run `id` (e.g. `id admin`). You'll see e.g. `uid=1026(admin) gid=100(users)` — use `PUID=1026` and `PGID=100`. Then create a folder for Ditto data (e.g. `Docker/ditto/data`) owned by that user; the container will write to it when you mount it at `/data`.
+**Finding your UID/GID on Synology:** SSH into the NAS and run `id` (e.g. `id admin`). Use `PUID`/`PGID` if you need the container to match your user for volume permissions.
 
-### Volumes (port settings)
+### Volumes
 
-1. **Data volume (required)**  
-   - **File/Folder:** Create or select a folder, e.g. `Docker/ditto/data` (so data survives container recreation).  
-   - **Mount path:** `/data`  
-   - This stores the SQLite database and any app data.
+1. **Postgres data (required if Postgres runs in a container)**  
+   Mount Postgres data out so the database survives container recreation. In the compose example this is the `ditto-postgres-data` volume mounted at `/var/lib/postgresql/data` in the postgres service. Without it, recreating the Postgres container wipes the database.
 
 2. **Folders to scan (one or more)**  
    Mount each shared folder you want to scan so it appears inside the container.  
@@ -101,33 +98,47 @@ Then use **Start scan** for each root. Scans run one at a time; you can queue mu
 
 ## Example with docker-compose
 
-If you use `docker-compose` (e.g. via Container Manager’s Compose support or SSH), you can use this as a template. Adjust ports and volume paths to match your NAS:
+If you use `docker-compose` (e.g. via Container Manager’s Compose support or SSH), you can use this as a template. **Important:** Ditto stores all data (folders, scans, file list) in PostgreSQL. To avoid losing data when you recreate containers, Postgres must use a **persistent volume** for its data directory (`/var/lib/postgresql/data`). The example below includes a `postgres` service with a named volume so data survives container recreation. Adjust ports and volume paths to match your NAS:
 
 ```yaml
 services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: ditto-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ditto
+      POSTGRES_PASSWORD: ditto
+      POSTGRES_DB: ditto
+      PGDATA: /var/lib/postgresql/data/pgdata 
+    volumes:
+      - ditto-postgres-data:/var/lib/postgresql/data
+
   ditto:
     image: ghcr.io/eargollo/ditto:latest
     container_name: ditto
     restart: unless-stopped
+    depends_on:
+      - postgres
     environment:
-      DITTO_DATA_DIR: /data
       DITTO_PORT: 8080
-      # PUID: 1026
-      # PGID: 100
+      DATABASE_URL: postgres://ditto:ditto@postgres:5432/ditto?sslmode=disable
     volumes:
-      - /volume1/docker/ditto/data:/data
       - /volume1/Photos:/scan/Photos:ro
     ports:
       - "8080:8080"
+
+volumes:
+  ditto-postgres-data:
 ```
 
-Replace:
+Replace `/volume1/Photos` with the host path to the folder you want to scan; use `/scan/Photos` (or similar) as the scan root in the UI.
 
-- `/volume1/docker/ditto/data` with a path where you want to persist data (set `PUID`/`PGID` to your user if needed).
-- `/volume1/Photos` with the host path to the folder you want to scan; use `/scan/Photos` (or similar) as the scan root in the UI.
+If you use an **external** Postgres (not in this compose), ensure its data directory is on a persistent volume; otherwise recreating that Postgres container will wipe the database.
 
 ## Troubleshooting
 
+- **Database empty every time I recreate the container:** All state is in **PostgreSQL**. If Postgres runs in a container, you must mount its data out: use a persistent volume for `/var/lib/postgresql/data` (e.g. `ditto-postgres-data` in the compose example). Without it, recreating the Postgres container wipes the database.
 - **Cannot add scan root / permission denied:** Ensure the shared folder is readable by the user the container runs as; check volume mount path and permissions in DSM.
-- **Container exits immediately:** Check **Log** in Container Manager for errors (e.g. missing `/data` or permission issues). Ensure the data volume is mounted at `/data`.
+- **Container exits immediately:** Check **Log** in Container Manager for errors (e.g. database connection, invalid DATABASE_URL).
 - **UI not reachable:** Confirm the container is running and the host port is correct; check firewall or DSM firewall rules if needed.

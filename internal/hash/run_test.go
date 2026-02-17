@@ -25,7 +25,8 @@ func addFileToScan(ctx context.Context, database *sql.DB, dir string, scanID int
 	if rel == "" || rel == "." {
 		rel = filepath.Base(absPath)
 	}
-	fileID, _ := db.UpsertFile(ctx, database, folderID, rel, size, mtime, inode, deviceID)
+	inodePtr := &inode
+	fileID, _ := db.UpsertFile(ctx, database, folderID, rel, size, mtime, inodePtr, deviceID)
 	_ = db.InsertFileScan(ctx, database, fileID, scanID)
 }
 

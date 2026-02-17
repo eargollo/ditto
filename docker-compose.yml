@@ -1,25 +1,37 @@
 # Example docker-compose for Ditto.
 # Uses the image published to GitHub Container Registry. Add "build: ." to build from source instead.
-# On Synology: set PUID/PGID to your user's UID/GID (run "id" via SSH) when using a host mount for /data.
 # Mount your shared folders under /scan so you can add e.g. /scan/Photos as a scan root in the UI.
+#
+# Important: persist Postgres data. Mount postgres data out (ditto-postgres-data) so the database
+# survives container recreates. Ditto itself does not need a persistent volume; all state is in Postgres.
 
 services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: ditto-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ditto
+      POSTGRES_PASSWORD: ditto
+      POSTGRES_DB: ditto
+      PGDATA: /var/lib/postgresql/data/pgdata 
+    volumes:
+      - ditto-postgres-data:/var/lib/postgresql/data
+
   ditto:
     image: ghcr.io/eargollo/ditto:latest
     container_name: ditto
     restart: unless-stopped
+    depends_on:
+      - postgres
     environment:
-      DITTO_DATA_DIR: /data
       DITTO_PORT: 8180
-      # PUID: 1000
-      # PGID: 1000
-      # When mounting a host path for /data on Synology, set PUID and PGID to your DSM user (e.g. id admin → PUID=1026 PGID=100)
+      DATABASE_URL: postgres://ditto:ditto@postgres:5432/ditto?sslmode=disable
     volumes:
-      - ditto-data:/data
       # Mount folders to scan (paths inside container = scan roots in UI)
       # - /path/on/host/Photos:/scan/Photos:ro
     ports:
       - "8180:8180"
 
 volumes:
-  ditto-data:
+  ditto-postgres-data:

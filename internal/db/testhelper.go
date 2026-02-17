@@ -30,6 +30,11 @@ func TestPostgresDB(t *testing.T) *sql.DB {
 	if err := MigratePostgres(db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	truncateAll := func() {
+		for _, table := range []string{"file_scan", "files", "scans", "folders"} {
+			_, _ = db.Exec("TRUNCATE TABLE " + table + " RESTART IDENTITY CASCADE")
+		}
+	}
 	// Clean state so tests see predictable data. Run tests with -p 1 to avoid cross-package truncate deadlocks.
 	for _, table := range []string{"file_scan", "files", "scans", "folders"} {
 		if _, err := db.Exec("TRUNCATE TABLE " + table + " RESTART IDENTITY CASCADE"); err != nil {
@@ -40,5 +45,7 @@ func TestPostgresDB(t *testing.T) *sql.DB {
 			t.Fatalf("truncate %s: %s", table, msg)
 		}
 	}
+	// Clean up after test so the database does not retain test data (e.g. scan records).
+	t.Cleanup(truncateAll)
 	return db
 }
