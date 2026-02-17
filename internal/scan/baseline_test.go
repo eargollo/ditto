@@ -85,7 +85,12 @@ func TestBaselineReferenceVsSystem(t *testing.T) {
 	ctx := context.Background()
 	fixtureRoot := baselineFixtureDir(t)
 
-	refCSV, _, err := ReferenceCSV(ctx, fixtureRoot, nil, nil)
+	// Use same exclude patterns as RunScan (defaults) so reference and system see the same files.
+	opts, err := OptionsForRoot(fixtureRoot)
+	if err != nil {
+		t.Fatalf("OptionsForRoot: %v", err)
+	}
+	refCSV, _, err := ReferenceCSV(ctx, fixtureRoot, opts.ExcludePatterns, nil)
 	if err != nil {
 		t.Fatalf("ReferenceCSV: %v", err)
 	}
