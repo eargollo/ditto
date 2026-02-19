@@ -2,7 +2,6 @@ package scan
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"io/fs"
 	"log"
@@ -189,7 +188,7 @@ func (m *ScanMetrics) Log() {
 // RunPipeline runs the parallel walk -> batched write pipeline for the given scan.
 // It returns the number of files written and skipped, or an error. The scan's completed_at
 // is not updated; the caller must call db.UpdateScanCompletedAt.
-func RunPipeline(ctx context.Context, database *sql.DB, scanID, folderID int64, rootPath, folderPath string, opts *ScanOptions, config *PipelineConfig) (fileCount, skippedScan int64, metrics *ScanMetrics, err error) {
+func RunPipeline(ctx context.Context, q db.Querier, scanID, folderID int64, rootPath, folderPath string, opts *ScanOptions, config *PipelineConfig) (fileCount, skippedScan int64, metrics *ScanMetrics, err error) {
 	if config == nil {
 		config = pipelineConfigFromEnv()
 	}
@@ -215,7 +214,7 @@ func RunPipeline(ctx context.Context, database *sql.DB, scanID, folderID int64, 
 
 	// Progress updater: write current file count to DB periodically so the UI shows live progress.
 	progressDone := make(chan struct{})
-	go runProgressUpdater(ctx, database, scanID, metrics, progressDone)
+	go runProgressUpdater(ctx, q, scanID, metrics, progressDone)
 
 	// Debug heartbeat: when DITTO_DEBUG_PIPELINE=1, log metrics every 5s and detect stuck (no change).
 	debugDone := make(chan struct{})
@@ -245,7 +244,7 @@ func RunPipeline(ctx context.Context, database *sql.DB, scanID, folderID int64, 
 	batchSize := config.batchSize()
 	writerDone := make(chan error, numWriters)
 	for i := 0; i < numWriters; i++ {
-		go runWriterSafe(ctx, database, folderID, scanID, folderPath, fileChan, batchSize, metrics, writerDone)
+		go runWriterSafe(ctx, q, folderID, scanID, folderPath, fileChan, batchSize, metrics, writerDone)
 	}
 
 	// Wait for all writers to finish (they exit when fileChan is closed and drained)
@@ -302,7 +301,7 @@ func runDebugHeartbeat(metrics *ScanMetrics, dirs *dirQueue, done <-chan struct{
 
 // runProgressUpdater updates the scan row's file_count periodically so the UI shows live progress.
 // Exits when progressDone is closed or ctx is cancelled.
-func runProgressUpdater(ctx context.Context, database *sql.DB, scanID int64, metrics *ScanMetrics, progressDone <-chan struct{}) {
+func runProgressUpdater(ctx context.Context, q db.Querier, scanID int64, metrics *ScanMetrics, progressDone <-chan struct{}) {
 	ticker := time.NewTicker(scanProgressUpdateInterval)
 	defer ticker.Stop()
 	for {
@@ -313,7 +312,7 @@ func runProgressUpdater(ctx context.Context, database *sql.DB, scanID int64, met
 			return
 		case <-ticker.C:
 			n := metrics.FilesWritten.Load()
-			if err := db.UpdateScanFileCountProgress(ctx, database, scanID, n); err != nil {
+			if err := db.UpdateScanFileCountProgress(ctx, q, scanID, n); err != nil {
 				log.Printf("[scan] progress update: %v", err)
 			}
 		}
@@ -435,7 +434,7 @@ func processOneDir(ctx context.Context, dir string, rootPath, folderPath string,
 }
 
 // runWriterSafe wraps runWriter with panic recovery so one failed writer doesn't hang the pipeline.
-func runWriterSafe(ctx context.Context, database *sql.DB, folderID, scanID int64, folderPath string,
+func runWriterSafe(ctx context.Context, q db.Querier, folderID, scanID int64, folderPath string,
 	fileChan <-chan Entry, batchSize int, metrics *ScanMetrics, done chan<- error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -443,11 +442,11 @@ func runWriterSafe(ctx context.Context, database *sql.DB, folderID, scanID int64
 			done <- fmt.Errorf("writer panic: %v", r)
 		}
 	}()
-	runWriter(ctx, database, folderID, scanID, folderPath, fileChan, batchSize, metrics, done)
+	runWriter(ctx, q, folderID, scanID, folderPath, fileChan, batchSize, metrics, done)
 }
 
 // runWriter reads entries from fileChan, batches them, and writes via UpsertFilesBatch + InsertFileScanBatch.
-func runWriter(ctx context.Context, database *sql.DB, folderID, scanID int64, folderPath string,
+func runWriter(ctx context.Context, q db.Querier, folderID, scanID int64, folderPath string,
 	fileChan <-chan Entry, batchSize int, metrics *ScanMetrics, done chan<- error) {
 	batch := make([]Entry, 0, batchSize)
 	flush := func() error {
@@ -460,6 +459,8 @@ func runWriter(ctx context.Context, database *sql.DB, folderID, scanID int64, fo
 			if err != nil {
 				relPath = e.Path
 			}
+			// Normalize to forward slashes so same file matches on rescan (e.g. Windows vs network).
+			relPath = filepath.ToSlash(relPath)
 			var inodePtr *int64
 			if e.Inode != InvalidInode {
 				v := e.Inode
@@ -474,11 +475,11 @@ func runWriter(ctx context.Context, database *sql.DB, folderID, scanID int64, fo
 			}
 		}
 		t0 := time.Now()
-		ids, err := db.UpsertFilesBatch(ctx, database, folderID, rows)
+		ids, err := db.UpsertFilesBatch(ctx, q, folderID, rows)
 		if err != nil {
 			return err
 		}
-		if err := db.InsertFileScanBatch(ctx, database, ids, scanID); err != nil {
+		if err := db.InsertFileScanBatch(ctx, q, ids, scanID); err != nil {
 			return err
 		}
 		metrics.DbNanos.Add(time.Since(t0).Nanoseconds())

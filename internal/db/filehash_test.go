@@ -10,8 +10,14 @@ func TestHashForInode_andUpdateFileHash_sameScanHardlinkReuse(t *testing.T) {
 	database := TestPostgresDB(t)
 	ctx := context.Background()
 
-	folderID, _ := AddFolder(ctx, database, "/tmp")
-	scan, _ := CreateScan(ctx, database, folderID)
+	folderID, err := AddFolder(ctx, database, "/tmp")
+	if err != nil {
+		t.Fatalf("AddFolder: %v", err)
+	}
+	scan, err := CreateScan(ctx, database, folderID)
+	if err != nil || scan == nil {
+		t.Fatalf("CreateScan: %v", err)
+	}
 	dev := int64(42)
 	fileID1, _ := UpsertFile(ctx, database, folderID, "a", 100, 1, ptrInt64(999), &dev)
 	InsertFileScan(ctx, database, fileID1, scan.ID)
@@ -24,7 +30,7 @@ func TestHashForInode_andUpdateFileHash_sameScanHardlinkReuse(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	const hashVal = "abc123"
-	_ = UpdateFileHash(ctx, database, fileID1, hashVal, now)
+	_ = UpdateFileHash(ctx, database, fileID1, hashVal, now, 0)
 
 	got, err := HashForInode(ctx, database, scan.ID, ptrInt64(999), &dev)
 	if err != nil {
@@ -34,7 +40,7 @@ func TestHashForInode_andUpdateFileHash_sameScanHardlinkReuse(t *testing.T) {
 		t.Errorf("HashForInode = %q, want %q", got, hashVal)
 	}
 
-	_ = UpdateFileHash(ctx, database, fileID2, got, now)
+	_ = UpdateFileHash(ctx, database, fileID2, got, now, 0)
 	files2, _ := GetFilesByScanID(ctx, database, scan.ID)
 	for _, f := range files2 {
 		if f.Hash == nil || *f.Hash != hashVal {
@@ -50,14 +56,20 @@ func TestHashForInode_nilDeviceID(t *testing.T) {
 	database := TestPostgresDB(t)
 	ctx := context.Background()
 
-	folderID, _ := AddFolder(ctx, database, "/tmp")
-	scan, _ := CreateScan(ctx, database, folderID)
+	folderID, err := AddFolder(ctx, database, "/tmp")
+	if err != nil {
+		t.Fatalf("AddFolder: %v", err)
+	}
+	scan, err := CreateScan(ctx, database, folderID)
+	if err != nil || scan == nil {
+		t.Fatalf("CreateScan: %v", err)
+	}
 	fileID1, _ := UpsertFile(ctx, database, folderID, "a", 10, 1, ptrInt64(111), nil)
 	InsertFileScan(ctx, database, fileID1, scan.ID)
 	fileID2, _ := UpsertFile(ctx, database, folderID, "b", 10, 2, ptrInt64(111), nil)
 	InsertFileScan(ctx, database, fileID2, scan.ID)
 
-	_ = UpdateFileHash(ctx, database, fileID1, "nildevhash", time.Now().UTC())
+	_ = UpdateFileHash(ctx, database, fileID1, "nildevhash", time.Now().UTC(), 0)
 	got, err := HashForInode(ctx, database, scan.ID, ptrInt64(111), nil)
 	if err != nil {
 		t.Fatalf("HashForInode: %v", err)
@@ -71,14 +83,26 @@ func TestHashForInodeFromPreviousScan_unchangedFileReusesHash(t *testing.T) {
 	database := TestPostgresDB(t)
 	ctx := context.Background()
 
-	f1, _ := AddFolder(ctx, database, "/tmp1")
-	f2, _ := AddFolder(ctx, database, "/tmp2")
-	scan1, _ := CreateScan(ctx, database, f1)
-	scan2, _ := CreateScan(ctx, database, f2)
+	f1, err := AddFolder(ctx, database, "/tmp1")
+	if err != nil {
+		t.Fatalf("AddFolder /tmp1: %v", err)
+	}
+	f2, err := AddFolder(ctx, database, "/tmp2")
+	if err != nil {
+		t.Fatalf("AddFolder /tmp2: %v", err)
+	}
+	scan1, err := CreateScan(ctx, database, f1)
+	if err != nil || scan1 == nil {
+		t.Fatalf("CreateScan scan1: %v", err)
+	}
+	scan2, err := CreateScan(ctx, database, f2)
+	if err != nil || scan2 == nil {
+		t.Fatalf("CreateScan scan2: %v", err)
+	}
 	dev := int64(1)
 	fileID1, _ := UpsertFile(ctx, database, f1, "f", 100, 1, ptrInt64(123), &dev)
 	InsertFileScan(ctx, database, fileID1, scan1.ID)
-	_ = UpdateFileHash(ctx, database, fileID1, "abc", time.Now().UTC())
+	_ = UpdateFileHash(ctx, database, fileID1, "abc", time.Now().UTC(), 0)
 
 	fileID2, _ := UpsertFile(ctx, database, f2, "f", 100, 1, ptrInt64(123), &dev)
 	InsertFileScan(ctx, database, fileID2, scan2.ID)
@@ -103,7 +127,7 @@ func TestHashForInodeFromPreviousScan_differentSizeDoesNotReuse(t *testing.T) {
 	dev := int64(1)
 	fileID1, _ := UpsertFile(ctx, database, f1, "f", 100, 1, ptrInt64(123), &dev)
 	InsertFileScan(ctx, database, fileID1, scan1.ID)
-	_ = UpdateFileHash(ctx, database, fileID1, "abc", time.Now().UTC())
+	_ = UpdateFileHash(ctx, database, fileID1, "abc", time.Now().UTC(), 0)
 
 	fileID2, _ := UpsertFile(ctx, database, f2, "f", 200, 1, ptrInt64(123), &dev)
 	InsertFileScan(ctx, database, fileID2, scan2.ID)
@@ -114,6 +138,49 @@ func TestHashForInodeFromPreviousScan_differentSizeDoesNotReuse(t *testing.T) {
 	}
 	if got != "" {
 		t.Errorf("HashForInodeFromPreviousScan(different size) = %q, want empty", got)
+	}
+}
+
+func TestHashForPathSize_reusesByPathAndSize(t *testing.T) {
+	database := TestPostgresDB(t)
+	ctx := context.Background()
+
+	f1, _ := AddFolder(ctx, database, "/folder1")
+	f2, _ := AddFolder(ctx, database, "/folder2")
+	scan1, _ := CreateScan(ctx, database, f1)
+	scan2, _ := CreateScan(ctx, database, f2)
+	fileID1, _ := UpsertFile(ctx, database, f1, "subdir/file.txt", 100, 1, nil, nil)
+	InsertFileScan(ctx, database, fileID1, scan1.ID)
+	_ = UpdateFileHash(ctx, database, fileID1, "pathsizehash", time.Now().UTC(), 0)
+
+	fileID2, _ := UpsertFile(ctx, database, f2, "subdir/file.txt", 100, 1, nil, nil)
+	InsertFileScan(ctx, database, fileID2, scan2.ID)
+
+	got, err := HashForPathSize(ctx, database, "subdir/file.txt", 100)
+	if err != nil {
+		t.Fatalf("HashForPathSize: %v", err)
+	}
+	if got != "pathsizehash" {
+		t.Errorf("HashForPathSize = %q, want pathsizehash", got)
+	}
+}
+
+func TestHashForPathSize_differentSizeReturnsEmpty(t *testing.T) {
+	database := TestPostgresDB(t)
+	ctx := context.Background()
+
+	folderID, _ := AddFolder(ctx, database, "/tmp")
+	scan, _ := CreateScan(ctx, database, folderID)
+	fileID, _ := UpsertFile(ctx, database, folderID, "a.txt", 50, 1, nil, nil)
+	InsertFileScan(ctx, database, fileID, scan.ID)
+	_ = UpdateFileHash(ctx, database, fileID, "h", time.Now().UTC(), 0)
+
+	got, err := HashForPathSize(ctx, database, "a.txt", 99)
+	if err != nil {
+		t.Fatalf("HashForPathSize: %v", err)
+	}
+	if got != "" {
+		t.Errorf("HashForPathSize(different size) = %q, want empty", got)
 	}
 }
 
@@ -158,14 +225,26 @@ func TestHashForInode_differentScanDoesNotReuse(t *testing.T) {
 	database := TestPostgresDB(t)
 	ctx := context.Background()
 
-	f1, _ := AddFolder(ctx, database, "/tmp1")
-	f2, _ := AddFolder(ctx, database, "/tmp2")
-	scan1, _ := CreateScan(ctx, database, f1)
-	scan2, _ := CreateScan(ctx, database, f2)
+	f1, err := AddFolder(ctx, database, "/tmp1")
+	if err != nil {
+		t.Fatalf("AddFolder /tmp1: %v", err)
+	}
+	f2, err := AddFolder(ctx, database, "/tmp2")
+	if err != nil {
+		t.Fatalf("AddFolder /tmp2: %v", err)
+	}
+	scan1, err := CreateScan(ctx, database, f1)
+	if err != nil || scan1 == nil {
+		t.Fatalf("CreateScan scan1: %v", err)
+	}
+	scan2, err := CreateScan(ctx, database, f2)
+	if err != nil || scan2 == nil {
+		t.Fatalf("CreateScan scan2: %v", err)
+	}
 	dev := int64(1)
 	fileID1, _ := UpsertFile(ctx, database, f1, "f", 50, 1, ptrInt64(123), &dev)
 	InsertFileScan(ctx, database, fileID1, scan1.ID)
-	_ = UpdateFileHash(ctx, database, fileID1, "scan1hash", time.Now().UTC())
+	_ = UpdateFileHash(ctx, database, fileID1, "scan1hash", time.Now().UTC(), 0)
 
 	fileID2, _ := UpsertFile(ctx, database, f2, "f", 50, 1, ptrInt64(123), &dev)
 	InsertFileScan(ctx, database, fileID2, scan2.ID)

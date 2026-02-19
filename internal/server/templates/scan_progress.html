@@ -14,20 +14,27 @@
 <p class="mt-4"><a href="/scans" class="text-blue-600 hover:underline">← Back to scans</a></p>
 {{end}}
 
+{{/* Shell: empty container for app.js to fill from REST API. .ScanID is 0 for home/scans, set for scan progress. */}}
+{{define "shell-content"}}
+<div id="content"{{if .ScanID}} data-scan-id="{{.ScanID}}"{{end}}><p class="text-gray-500">Loading…</p></div>
+{{end}}
+
 {{define "scan-status-fragment"}}
 <div class="rounded border border-gray-200 p-4 bg-white">
   <table class="min-w-full text-sm">
     <tr><td class="font-medium text-gray-700 pr-4">Status</td><td>{{if .HashCompletedAt}}Done{{else if .HashStartedAt}}Hashing…{{else if .CompletedAt}}Hashing…{{else}}Scanning…{{end}}</td></tr>
     <tr><td class="font-medium text-gray-700 pr-4">Created</td><td>{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td></tr>
     <tr><td class="font-medium text-gray-700 pr-4">Completed</td><td>{{if .CompletedAt}}{{.CompletedAt.Format "2006-01-02 15:04:05"}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Deleted-at update</td><td>{{if .DeletedAtUpdateDurationMs}}{{.DeletedAtUpdateDurationMs}} ms{{else}}—{{end}}</td></tr>
     <tr><td class="font-medium text-gray-700 pr-4">Files scanned</td><td>{{if .FileCount}}{{.FileCount}}{{else}}0{{end}}</td></tr>
     <tr><td class="font-medium text-gray-700 pr-4">Skipped (scan)</td><td>{{if .ScanSkippedCount}}{{.ScanSkippedCount}}{{else}}—{{end}}</td></tr>
     <tr><td class="font-medium text-gray-700 pr-4">Hash started</td><td>{{if .HashStartedAt}}{{.HashStartedAt.Format "2006-01-02 15:04:05"}}{{else}}—{{end}}</td></tr>
     <tr><td class="font-medium text-gray-700 pr-4">Hash completed</td><td>{{if .HashCompletedAt}}{{.HashCompletedAt.Format "2006-01-02 15:04:05"}}{{else}}—{{end}}</td></tr>
-    <tr><td class="font-medium text-gray-700 pr-4">Hashed files</td><td>{{if .HashedFileCount}}{{.HashedFileCount}}{{else}}—{{end}}</td></tr>
-    <tr><td class="font-medium text-gray-700 pr-4">Reused hash</td><td>{{if .HashReusedCount}}{{.HashReusedCount}}{{else}}—{{end}}</td></tr>
-    <tr><td class="font-medium text-gray-700 pr-4">Skipped (hash)</td><td>{{if .HashErrorCount}}{{.HashErrorCount}}{{else}}—{{end}}</td></tr>
-    <tr><td class="font-medium text-gray-700 pr-4">Hashed bytes</td><td>{{if .HashedByteCount}}{{.HashedByteCount}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Files with hash</td><td>{{if .HashedFileCount}}{{.HashedFileCount}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Reused (no read)</td><td>{{if .HashReusedCount}}{{.HashReusedCount}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Read from disk</td><td>{{.HashedReadCount}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Hash errors</td><td>{{if .HashErrorCount}}{{.HashErrorCount}}{{else}}—{{end}}</td></tr>
+    <tr><td class="font-medium text-gray-700 pr-4">Hashed bytes</td><td>{{formatBytesWithRaw .HashedByteCount}}</td></tr>
   </table>
   <p class="mt-2 flex gap-4">
     <a href="/scans/{{.ID}}/export" download="scan-{{.ID}}-files.csv" class="text-blue-600 hover:underline">Download CSV</a>

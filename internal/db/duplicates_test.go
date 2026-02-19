@@ -24,8 +24,8 @@ func TestDuplicateGroupsByHash_and_FilesInHashGroup(t *testing.T) {
 	InsertFileScan(ctx, db, fileID2, scan.ID)
 	hash := "abc123"
 	now := time.Now().UTC()
-	_ = UpdateFileHash(ctx, db, fileID1, hash, now)
-	_ = UpdateFileHash(ctx, db, fileID2, hash, now)
+	_ = UpdateFileHash(ctx, db, fileID1, hash, now, 0)
+	_ = UpdateFileHash(ctx, db, fileID2, hash, now, 0)
 
 	groups, err := DuplicateGroupsByHash(ctx, db, scan.ID)
 	if err != nil {
@@ -81,7 +81,7 @@ func TestDuplicateGroupsByHashAcrossScans(t *testing.T) {
 		} else {
 			InsertFileScan(ctx, db, fileID, scan2.ID)
 		}
-		_ = UpdateFileHash(ctx, db, fileID, hash, now)
+		_ = UpdateFileHash(ctx, db, fileID, hash, now, 0)
 	}
 
 	scanIDs := []int64{scan1.ID, scan2.ID}

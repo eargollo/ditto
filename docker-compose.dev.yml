@@ -1,6 +1,13 @@
-# Local development: PostgreSQL only.
+# Local development: PostgreSQL with two databases (same instance).
 # Start with: docker compose -f docker-compose.dev.yml up -d
-# Then run the app with DATABASE_URL=postgres://ditto:ditto@localhost:5432/ditto?sslmode=disable
+#
+# Databases:
+#   - ditto      — development (make run, UI, scans)
+#   - ditto_test — tests (make test, go test; default when DATABASE_URL is unset)
+#
+# make run uses ditto; tests use ditto_test so dev data and test data stay separate.
+# If the postgres volume already existed before adding the init script, create the test DB manually:
+#   docker exec -it ditto-postgres-dev psql -U ditto -d ditto -c "CREATE DATABASE ditto_test;"
 
 services:
   postgres:
@@ -15,6 +22,7 @@ services:
       - "5432:5432"
     volumes:
       - ditto-postgres-dev:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d
 
 volumes:
   ditto-postgres-dev:

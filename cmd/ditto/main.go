@@ -27,6 +27,12 @@ func main() {
 		return
 	}
 
+	// Migrate only: open DB, run migrations, exit. Uses DITTO_TEST_DATABASE_URL if set (for tests), else DATABASE_URL via config.
+	if len(os.Args) >= 2 && os.Args[1] == "migrate" {
+		runMigrate()
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
@@ -45,6 +51,9 @@ func main() {
 
 	if err := db.MigratePostgres(database); err != nil {
 		log.Fatalf("migrate: %v", err)
+	}
+	if err := db.BackfillFilesDeletedAt(context.Background(), database); err != nil {
+		log.Printf("backfill deleted_at: %v", err)
 	}
 
 	if len(os.Args) >= 3 && os.Args[1] == "scan" {
@@ -153,4 +162,24 @@ func runScan(ctx context.Context, database *sql.DB, rootPath string) {
 		log.Fatalf("hash phase: %v", err)
 	}
 	log.Printf("Hash phase complete for scan %d. Use the Web UI to view duplicates.", scanID)
+}
+
+func runMigrate() {
+	url := os.Getenv("DITTO_TEST_DATABASE_URL")
+	if url == "" {
+		cfg, err := config.Load()
+		if err != nil {
+			log.Fatalf("config: %v", err)
+		}
+		url = cfg.DatabaseURL()
+	}
+	conn, err := db.OpenPostgres(url)
+	if err != nil {
+		log.Fatalf("open database: %v", err)
+	}
+	defer conn.Close()
+	if err := db.MigratePostgres(conn); err != nil {
+		log.Fatalf("migrate: %v", err)
+	}
+	log.Print("migrate: done")
 }

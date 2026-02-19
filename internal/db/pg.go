@@ -46,7 +46,8 @@ func MigratePostgres(db *sql.DB) error {
 			hashed_file_count BIGINT,
 			hashed_byte_count BIGINT,
 			hash_reused_count BIGINT,
-			hash_error_count BIGINT
+			hash_error_count BIGINT,
+			deleted_at_update_duration_ms BIGINT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_scans_folder_id ON scans(folder_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_scans_started_at ON scans(started_at DESC)`,
@@ -61,6 +62,8 @@ func MigratePostgres(db *sql.DB) error {
 			hash TEXT,
 			hash_status TEXT NOT NULL DEFAULT 'pending',
 			hashed_at TIMESTAMPTZ,
+			hashed_mtime BIGINT,
+			deleted_at TIMESTAMPTZ,
 			UNIQUE(folder_id, path)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_files_folder_id ON files(folder_id)`,
@@ -76,6 +79,12 @@ func MigratePostgres(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_file_scan_scan_id ON file_scan(scan_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_file_scan_file_id ON file_scan(file_id)`,
+		`CREATE TABLE IF NOT EXISTS duplicate_groups_hash (
+			hash TEXT PRIMARY KEY,
+			file_count BIGINT NOT NULL,
+			total_size BIGINT NOT NULL,
+			reclaimable_size BIGINT NOT NULL
+		)`,
 	}
 	for _, q := range ddl {
 		if _, err := db.Exec(q); err != nil {
@@ -84,7 +93,18 @@ func MigratePostgres(db *sql.DB) error {
 	}
 	// Allow inode to be NULL for existing DBs created with inode NOT NULL (no-op if already nullable).
 	if _, err := db.Exec("ALTER TABLE files ALTER COLUMN inode DROP NOT NULL"); err != nil {
-		// Column may already be nullable (new install); ignore.
+		_ = err
+	}
+	// Add deleted_at to files for existing DBs (no-op if column exists).
+	if _, err := db.Exec("ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ"); err != nil {
+		_ = err
+	}
+	// Add deleted_at_update_duration_ms to scans for existing DBs (no-op if column exists).
+	if _, err := db.Exec("ALTER TABLE scans ADD COLUMN IF NOT EXISTS deleted_at_update_duration_ms BIGINT"); err != nil {
+		_ = err
+	}
+	// Add hashed_mtime to files for existing DBs (no-op if column exists).
+	if _, err := db.Exec("ALTER TABLE files ADD COLUMN IF NOT EXISTS hashed_mtime BIGINT"); err != nil {
 		_ = err
 	}
 	return nil

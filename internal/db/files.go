@@ -2,18 +2,18 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 	"time"
 )
 
-// File is a single file record (metadata and optional hash). Path may be relative (folder) or full (when joined with folder for display).
+// File is a single file record (metadata and optional hash). Path is full when from hash queue (folder path + RelPath); RelPath is the stored relative path for path+size reuse when inode is nil.
 type File struct {
 	ID         int64
 	ScanID     int64   // set when querying by scan (from file_scan)
-	FolderID   int64   // folder that contains this file
-	Path       string  // relative to folder in DB; full path when selected with folder path for display
+	FolderID   int64   // folder that contains this file (optional; set when needed for reuse)
+	Path       string  // full path when from hash queue (folder path + "/" + RelPath)
+	RelPath    string  // relative path (files.path in DB); used for path+size hash reuse when inode is nil
 	Size       int64
 	MTime      int64
 	Inode      *int64
@@ -24,7 +24,7 @@ type File struct {
 }
 
 // UpsertFile inserts or updates a file by (folder_id, path) and returns the file id. Path must be relative to the folder root.
-func UpsertFile(ctx context.Context, db *sql.DB, folderID int64, path string, size, mtime int64, inode *int64, deviceID *int64) (int64, error) {
+func UpsertFile(ctx context.Context, q Querier, folderID int64, path string, size, mtime int64, inode *int64, deviceID *int64) (int64, error) {
 	var deviceVal, inodeVal interface{} = nil, nil
 	if deviceID != nil {
 		deviceVal = *deviceID
@@ -33,7 +33,7 @@ func UpsertFile(ctx context.Context, db *sql.DB, folderID int64, path string, si
 		inodeVal = *inode
 	}
 	var id int64
-	err := db.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		`INSERT INTO files (folder_id, path, size, mtime, inode, device_id, hash_status)
 		 VALUES ($1, $2, $3, $4, $5, $6, 'pending')
 		 ON CONFLICT (folder_id, path) DO UPDATE SET size = EXCLUDED.size, mtime = EXCLUDED.mtime, inode = EXCLUDED.inode, device_id = EXCLUDED.device_id
@@ -43,8 +43,8 @@ func UpsertFile(ctx context.Context, db *sql.DB, folderID int64, path string, si
 }
 
 // InsertFileScan links a file to a scan (ledger). Idempotent: use ON CONFLICT DO NOTHING if needed.
-func InsertFileScan(ctx context.Context, db *sql.DB, fileID, scanID int64) error {
-	_, err := db.ExecContext(ctx,
+func InsertFileScan(ctx context.Context, q Querier, fileID, scanID int64) error {
+	_, err := q.ExecContext(ctx,
 		`INSERT INTO file_scan (file_id, scan_id) VALUES ($1, $2) ON CONFLICT (file_id, scan_id) DO NOTHING`,
 		fileID, scanID)
 	return err
@@ -61,7 +61,7 @@ type FileRow struct {
 
 // UpsertFilesBatch inserts or updates multiple files in one round-trip and returns their IDs in the same order.
 // Paths must be relative to the folder root. Empty slice returns nil, nil.
-func UpsertFilesBatch(ctx context.Context, database *sql.DB, folderID int64, rows []FileRow) ([]int64, error) {
+func UpsertFilesBatch(ctx context.Context, q Querier, folderID int64, rows []FileRow) ([]int64, error) {
 	if len(rows) == 0 {
 		return nil, nil
 	}
@@ -89,7 +89,7 @@ func UpsertFilesBatch(ctx context.Context, database *sql.DB, folderID int64, row
 		VALUES ` + strings.Join(placeholders, ", ") + `
 		ON CONFLICT (folder_id, path) DO UPDATE SET size = EXCLUDED.size, mtime = EXCLUDED.mtime, inode = EXCLUDED.inode, device_id = EXCLUDED.device_id
 		RETURNING id`
-	rowsResult, err := database.QueryContext(ctx, query, args...)
+	rowsResult, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +112,7 @@ func UpsertFilesBatch(ctx context.Context, database *sql.DB, folderID int64, row
 }
 
 // InsertFileScanBatch links multiple files to a scan in one round-trip. Idempotent (ON CONFLICT DO NOTHING).
-func InsertFileScanBatch(ctx context.Context, database *sql.DB, fileIDs []int64, scanID int64) error {
+func InsertFileScanBatch(ctx context.Context, q Querier, fileIDs []int64, scanID int64) error {
 	if len(fileIDs) == 0 {
 		return nil
 	}
@@ -131,13 +131,66 @@ func InsertFileScanBatch(ctx context.Context, database *sql.DB, fileIDs []int64,
 	// #nosec G202 -- placeholders built from len(fileIDs); all values passed as args
 	query := `INSERT INTO file_scan (file_id, scan_id) VALUES ` + strings.Join(placeholders, ", ") + `
 		ON CONFLICT (file_id, scan_id) DO NOTHING`
-	_, err := database.ExecContext(ctx, query, args...)
+	_, err := q.ExecContext(ctx, query, args...)
 	return err
 }
 
+// UpdateFilesDeletedAtForScan updates deleted_at for all files in the given folder: NULL for files in the scan, now() for files not in the scan.
+// Sets hash_status = 'pending' (and clears hash, hashed_at, hashed_mtime) for files in the scan whose mtime changed since last hash (mtime != hashed_mtime) or never hashed.
+// Clearing hash avoids stale hashes for files that are no longer duplicate-size candidates; tests must allow mtime to change (e.g. sleep after write) on 1s-resolution filesystems.
+// Call after a scan completes (all file_scan rows for that scan are inserted). folderID must be the scan's folder_id.
+func UpdateFilesDeletedAtForScan(ctx context.Context, q Querier, scanID, folderID int64) error {
+	_, err := q.ExecContext(ctx,
+		`UPDATE files SET
+			deleted_at = CASE
+				WHEN id IN (SELECT file_id FROM file_scan WHERE scan_id = $1) THEN NULL
+				ELSE COALESCE(deleted_at, (NOW() AT TIME ZONE 'UTC'))
+			END,
+			hash_status = CASE
+				WHEN id IN (SELECT file_id FROM file_scan WHERE scan_id = $1)
+					AND (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN 'pending'
+				ELSE hash_status
+			END,
+			hash = CASE
+				WHEN id IN (SELECT file_id FROM file_scan WHERE scan_id = $1)
+					AND (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN NULL
+				ELSE hash
+			END,
+			hashed_at = CASE
+				WHEN id IN (SELECT file_id FROM file_scan WHERE scan_id = $1)
+					AND (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN NULL
+				ELSE hashed_at
+			END,
+			hashed_mtime = CASE
+				WHEN id IN (SELECT file_id FROM file_scan WHERE scan_id = $1)
+					AND (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN NULL
+				ELSE hashed_mtime
+			END
+		WHERE folder_id = $2`,
+		scanID, folderID)
+	return err
+}
+
+// BackfillFilesDeletedAt sets deleted_at for all files based on the latest completed scan per folder.
+// Call once after adding the deleted_at column (e.g. on startup). Idempotent.
+func BackfillFilesDeletedAt(ctx context.Context, q Querier) error {
+	folders, err := ListFolders(ctx, q)
+	if err != nil {
+		return err
+	}
+	for _, folder := range folders {
+		scanID, err := GetLatestCompletedScanIDForFolder(ctx, q, folder.ID)
+		if err != nil || scanID == 0 {
+			continue
+		}
+		_ = UpdateFilesDeletedAtForScan(ctx, q, scanID, folder.ID)
+	}
+	return nil
+}
+
 // GetFilesByScanID returns all files that appear in the given scan (with full path: folder path || '/' || file path). ScanID is set on each file.
-func GetFilesByScanID(ctx context.Context, db *sql.DB, scanID int64) ([]File, error) {
-	rows, err := db.QueryContext(ctx,
+func GetFilesByScanID(ctx context.Context, q Querier, scanID int64) ([]File, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT f.id, $2::bigint, (fo.path || '/' || f.path), f.size, f.mtime, f.inode, f.device_id, f.hash, f.hash_status, f.hashed_at
 		 FROM files f JOIN file_scan fs ON f.id = fs.file_id JOIN folders fo ON f.folder_id = fo.id
 		 WHERE fs.scan_id = $1 ORDER BY f.id`,

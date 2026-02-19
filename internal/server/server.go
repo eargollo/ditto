@@ -3,18 +3,19 @@ package server
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"embed"
 	"encoding/csv"
 	"encoding/json"
 	"html/template"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eargollo/ditto/internal/config"
@@ -33,27 +34,35 @@ const scanQueueCap = 64
 
 type Server struct {
 	cfg       *config.Config
-	db        *sql.DB
+	db        db.Database
 	mux       *http.ServeMux
 	tmpl      *template.Template
 	scanQueue chan int64 // scan IDs to process; one worker runs them serially
+
+	// When Run() is used with port 0, listenAddr is set to the base URL and listenReady is closed once listening.
+	mu          sync.Mutex
+	listenAddr  string       // e.g. "http://127.0.0.1:12345"
+	listenReady chan struct{} // closed when server is listening (only set when port 0)
+	listenCond  *sync.Cond    // signaled when listenReady is set (so ListenReady() can block until Run() sets it)
 }
 
 // NewServer creates a server using the given config and database.
-func NewServer(cfg *config.Config, database *sql.DB) (*Server, error) {
+func NewServer(cfg *config.Config, database db.Database) (*Server, error) {
 	fm := template.FuncMap{
-		"formatBytes": formatBytes,
+		"formatBytes":        formatBytes,
+		"formatBytesWithRaw": formatBytesWithRaw,
 	}
 	tmpl, err := template.New("").Funcs(fm).ParseFS(fs.FS(templateFS), "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
 	s := &Server{cfg: cfg, db: database, mux: http.NewServeMux(), tmpl: tmpl, scanQueue: make(chan int64, scanQueueCap)}
+	s.listenCond = sync.NewCond(&s.mu)
 	s.routes()
 	return s, nil
 }
 
-func (s *Server) dbForRead() *sql.DB { return s.db }
+func (s *Server) dbForRead() db.Database { return s.db }
 
 func formatBytes(n int64) string {
 	const unit = 1024
@@ -76,6 +85,33 @@ func formatBytes(n int64) string {
 	return strconv.FormatFloat(float64(n)/float64(div), 'f', 1, 64) + " " + units[exp]
 }
 
+// formatBytesWithRaw formats n as "X.XX GB (4,342,234,453 bytes)". Accepts *int64 for optional values; nil or zero returns "—".
+func formatBytesWithRaw(n *int64) string {
+	if n == nil {
+		return "—"
+	}
+	v := *n
+	if v == 0 {
+		return "0 B (0 bytes)"
+	}
+	return formatBytes(v) + " (" + formatIntWithCommas(v) + " bytes)"
+}
+
+func formatIntWithCommas(n int64) string {
+	if n < 0 {
+		return "-" + formatIntWithCommas(-n)
+	}
+	s := strconv.FormatInt(n, 10)
+	var b strings.Builder
+	for i, r := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /{$}", s.handleHome())
 	s.mux.HandleFunc("GET /scans", s.handleScans())
@@ -84,6 +120,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /scans/start", s.handleScansStart())
 	s.mux.HandleFunc("POST /scans/{id}/continue", s.handleScanContinue())
 	s.mux.HandleFunc("GET /scans/{id}/status", s.handleScanStatus())
+	s.mux.HandleFunc("GET /duplicates/hash/{hash}", s.handleDuplicateHashGroupByHash())
 	s.mux.HandleFunc("GET /scans/{id}/duplicates/hash/{hash}", s.handleDuplicateHashGroup())
 	s.mux.HandleFunc("GET /scans/{id}/duplicates/inode", s.handleDuplicateInodeGroup())
 	s.mux.HandleFunc("GET /scans/{id}/duplicates", s.handleDuplicates())
@@ -91,6 +128,20 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /scans/{id}", s.handleScanProgress())
 	s.mux.HandleFunc("GET /api/fragment", s.handleFragment())
 	s.mux.HandleFunc("GET /health", s.handleHealth())
+
+	// REST API (JSON); see docs/plan/rest-api-and-pages.md
+	s.mux.HandleFunc("GET /api/health", s.apiHealth())
+	s.mux.HandleFunc("GET /api/roots", s.apiRootsList())
+	s.mux.HandleFunc("POST /api/roots", s.apiRootsCreate())
+	s.mux.HandleFunc("GET /api/roots/{id}", s.apiRootsGet())
+	s.mux.HandleFunc("GET /api/scans", s.apiScansList())
+	s.mux.HandleFunc("POST /api/scans", s.apiScansCreate())
+	s.mux.HandleFunc("GET /api/scans/{id}", s.apiScansGet())
+	s.mux.HandleFunc("POST /api/scans/{id}/continue", s.apiScansContinue())
+	s.mux.HandleFunc("GET /api/scans/{id}/status", s.apiScansStatus())
+	s.mux.HandleFunc("GET /api/duplicates/summary", s.apiDuplicatesSummary())
+	s.mux.HandleFunc("GET /api/duplicates/groups", s.apiDuplicatesGroups())
+
 	staticRoot, _ := fs.Sub(staticFS, "static")
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticRoot))))
 	s.mux.HandleFunc("/", s.handle404())
@@ -143,11 +194,9 @@ type GroupWithPaths struct {
 
 // HomePageData is passed to the home template.
 type HomePageData struct {
-	Roots        []ScanRootChoice // unique roots (latest scan per root) for dropdown
-	SelectedScan int64            // scan id currently shown
-	SelectedRoot string           // root path label
-	Groups       []GroupWithPaths // duplicate groups with file paths
-	Page         int              // 1-based
+	Summary      db.DuplicateGroupsHashSummary // summary at top (groups, files, size that can be saved)
+	Groups       []GroupWithPaths              // duplicate groups with file paths
+	Page         int                           // 1-based
 	PageSize     int
 	TotalGroups  int64
 	TotalPages   int
@@ -155,131 +204,32 @@ type HomePageData struct {
 	NextPage     int // 0 if no next
 }
 
+// shellData is passed to the shell template. ScanID is 0 for home/scans; set for scan progress so app.js can poll status.
+type shellData struct {
+	ScanID int64
+}
+
 func (s *Server) handleHome() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		log.Printf("[home] request started")
-		defer func() { log.Printf("[home] served in %v", time.Since(start)) }()
+		s.renderPage(w, "layout.html", "shell-content", &shellData{})
+	}
+}
 
-		ctx := r.Context()
-		scans, err := db.ListScansRecent(ctx, s.dbForRead(), homeListScansLimit)
+// handleDuplicateHashGroupByHash serves GET /duplicates/hash/{hash} using precomputed view (files by hash, deleted_at IS NULL).
+func (s *Server) handleDuplicateHashGroupByHash() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		hash := r.PathValue("hash")
+		if hash == "" {
+			http.Error(w, "hash required", http.StatusBadRequest)
+			return
+		}
+		files, err := db.FilesInHashGroupByHash(r.Context(), s.dbForRead(), hash, 0)
 		if err != nil {
-			log.Printf("error: home list scans: %v", err)
+			log.Printf("error: files in hash group hash=%s: %v", hash, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Build unique roots: latest scan per root_path (scans are newest first).
-		seen := make(map[string]bool)
-		var roots []ScanRootChoice
-		for i := 0; i < len(scans) && len(roots) < maxScansForRoots; i++ {
-			sc := scans[i]
-			if seen[sc.RootPath] {
-				continue
-			}
-			seen[sc.RootPath] = true
-			roots = append(roots, ScanRootChoice{RootPath: sc.RootPath, ScanID: sc.ID, CreatedAt: sc.CreatedAt})
-		}
-		if len(roots) == 0 {
-			s.renderPage(w, "layout.html", "home-content", HomePageData{Roots: roots})
-			return
-		}
-		// Selected scan: from ?scan_id= or default first. 0 = "All (latest per folder)".
-		selectedScanID := roots[0].ScanID
-		if idStr := r.URL.Query().Get("scan_id"); idStr != "" {
-			if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
-				if id == 0 {
-					selectedScanID = 0
-				} else {
-					for _, r := range roots {
-						if r.ScanID == id {
-							selectedScanID = id
-							break
-						}
-					}
-				}
-			}
-		}
-		var selectedRoot string
-		if selectedScanID == 0 {
-			selectedRoot = "All (latest per folder)"
-		} else {
-			for _, r := range roots {
-				if r.ScanID == selectedScanID {
-					selectedRoot = r.RootPath
-					break
-				}
-			}
-		}
-		page := 1
-		if p := r.URL.Query().Get("page"); p != "" {
-			if pn, err := strconv.Atoi(p); err == nil && pn >= 1 {
-				page = pn
-			}
-		}
-		scanIDsForAll := make([]int64, len(roots))
-		for i := range roots {
-			scanIDsForAll[i] = roots[i].ScanID
-		}
-		var totalGroups int64
-		if selectedScanID == 0 {
-			totalGroups, _ = db.DuplicateGroupsByHashCountAcrossScans(ctx, s.dbForRead(), scanIDsForAll)
-		} else {
-			totalGroups, _ = db.DuplicateGroupsByHashCount(ctx, s.dbForRead(), selectedScanID)
-		}
-		totalPages := 1
-		if totalGroups > 0 && homePageSize > 0 {
-			totalPages = int((totalGroups + int64(homePageSize) - 1) / int64(homePageSize))
-		}
-		if page > totalPages {
-			page = totalPages
-		}
-		offset := (page - 1) * homePageSize
-		var groups []db.DuplicateGroupByHash
-		if selectedScanID == 0 {
-			groups, _ = db.DuplicateGroupsByHashPaginatedAcrossScans(ctx, s.dbForRead(), scanIDsForAll, homePageSize, offset)
-		} else {
-			groups, _ = db.DuplicateGroupsByHashPaginated(ctx, s.dbForRead(), selectedScanID, homePageSize, offset)
-		}
-		// Attach file paths to each group (limit per group so home page stays fast)
-		groupsWithPaths := make([]GroupWithPaths, 0, len(groups))
-		for _, g := range groups {
-			var files []db.File
-			if selectedScanID == 0 {
-				files, _ = db.FilesInHashGroupLimitAcrossScans(ctx, s.dbForRead(), scanIDsForAll, g.Hash, homeMaxPathsPerGroup)
-			} else {
-				files, _ = db.FilesInHashGroupLimit(ctx, s.dbForRead(), selectedScanID, g.Hash, homeMaxPathsPerGroup)
-			}
-			paths := make([]string, len(files))
-			for i, f := range files {
-				paths[i] = f.Path
-			}
-			perFile := int64(0)
-			if g.Count > 0 {
-				perFile = g.Size / g.Count
-			}
-			truncated := g.Count > int64(len(paths))
-			groupsWithPaths = append(groupsWithPaths, GroupWithPaths{Hash: g.Hash, Count: g.Count, Size: g.Size, PerFileSize: perFile, Paths: paths, PathsTruncated: truncated})
-		}
-		prevPage, nextPage := 0, 0
-		if page > 1 {
-			prevPage = page - 1
-		}
-		if page < totalPages {
-			nextPage = page + 1
-		}
-		data := HomePageData{
-			Roots:        roots,
-			SelectedScan: selectedScanID,
-			SelectedRoot: selectedRoot,
-			Groups:       groupsWithPaths,
-			Page:         page,
-			PageSize:     homePageSize,
-			TotalGroups:  totalGroups,
-			TotalPages:   totalPages,
-			PrevPage:     prevPage,
-			NextPage:     nextPage,
-		}
-		s.renderPage(w, "layout.html", "home-content", data)
+		s.renderPage(w, "layout.html", "duplicate-group-content", hashGroupData{ScanID: 0, Hash: hash, Files: files})
 	}
 }
 
@@ -291,17 +241,7 @@ type scansPageData struct {
 
 func (s *Server) handleScans() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		scans, _ := db.ListScans(ctx, s.dbForRead())
-		roots, _ := db.ListScanRoots(ctx, s.dbForRead())
-		byRoot := make(map[string]int64)
-		for _, root := range roots {
-			id, _ := db.GetLatestIncompleteScanForFolder(ctx, s.dbForRead(), root.ID)
-			if id > 0 {
-				byRoot[root.Path] = id
-			}
-		}
-		s.renderPage(w, "layout.html", "scans-content", scansPageData{Scans: scans, Roots: roots, IncompleteScanIDByRoot: byRoot})
+		s.renderPage(w, "layout.html", "shell-content", &shellData{})
 	}
 }
 
@@ -405,22 +345,20 @@ func (s *Server) handleScanContinue() http.HandlerFunc {
 
 func (s *Server) handleScanProgress() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		idStr := r.PathValue("id")
-		if idStr == "" {
-			http.Error(w, "id required", http.StatusBadRequest)
-			return
-		}
-		scanID, err := strconv.ParseInt(idStr, 10, 64)
+		scanID, err := parseScanID(r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		sn, err := db.GetScan(r.Context(), s.dbForRead(), scanID)
-		if err != nil {
-			http.Error(w, "scan not found", http.StatusNotFound)
+		if _, err := db.GetScan(r.Context(), s.dbForRead(), scanID); err != nil {
+			if isNotFound(err) {
+				http.Error(w, "scan not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		s.renderPage(w, "layout.html", "scan-progress-content", sn)
+		s.renderPage(w, "layout.html", "shell-content", &shellData{ScanID: scanID})
 	}
 }
 
@@ -704,10 +642,35 @@ func (s *Server) handle404() http.HandlerFunc {
 	}
 }
 
+// ListenAddr returns the base URL (e.g. "http://127.0.0.1:12345") once the server is listening.
+// Only set when Run() is started with port 0. Callers should wait on ListenReady() first.
+func (s *Server) ListenAddr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listenAddr
+}
+
+// ListenReady returns a channel that is closed when the server is listening. When port is 0,
+// blocks until Run() has set the channel, then returns it so callers can wait for Serve() to start.
+// When port is not 0, returns a channel that is already closed so callers do not block.
+func (s *Server) ListenReady() <-chan struct{} {
+	s.mu.Lock()
+	for s.listenReady == nil {
+		s.listenCond.Wait()
+	}
+	ready := s.listenReady
+	s.mu.Unlock()
+	if ready == nil {
+		closed := make(chan struct{})
+		close(closed)
+		return closed
+	}
+	return ready
+}
+
 func (s *Server) Run(ctx context.Context) error {
 	go s.runScanWorker(ctx)
 	srv := &http.Server{
-		Addr:         ":" + strconv.Itoa(s.cfg.Port()),
 		Handler:      s.mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
@@ -718,6 +681,27 @@ func (s *Server) Run(ctx context.Context) error {
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()
+
+	port := s.cfg.Port()
+	if port == 0 {
+		s.mu.Lock()
+		s.listenReady = make(chan struct{})
+		s.listenCond.Broadcast()
+		s.mu.Unlock()
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return err
+		}
+		addr := listener.Addr().(*net.TCPAddr)
+		baseURL := "http://127.0.0.1:" + strconv.Itoa(addr.Port)
+		s.mu.Lock()
+		s.listenAddr = baseURL
+		close(s.listenReady)
+		s.mu.Unlock()
+		return srv.Serve(listener)
+	}
+
+	srv.Addr = ":" + strconv.Itoa(port)
 	err := srv.ListenAndServe()
 	if err == http.ErrServerClosed {
 		return nil

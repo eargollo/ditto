@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"database/sql"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,12 +13,9 @@ import (
 	"github.com/eargollo/ditto/internal/db"
 )
 
-func testServer(t *testing.T) (*Server, *sql.DB) {
+func testServer(t *testing.T) (*Server, db.Database) {
 	t.Helper()
-	if os.Getenv(config.EnvDatabaseURL) == "" {
-		os.Setenv(config.EnvDatabaseURL, db.DefaultTestDatabaseURL)
-		defer os.Unsetenv(config.EnvDatabaseURL)
-	}
+	os.Setenv(config.EnvDatabaseURL, db.TestDatabaseURL())
 	database := db.TestPostgresDB(t)
 	cfg, err := config.Load()
 	if err != nil {
@@ -65,8 +61,12 @@ func TestServer_ScansReturns200WithScansContent(t *testing.T) {
 		t.Errorf("GET /scans: code = %d, want 200", rec.Code)
 	}
 	body, _ := io.ReadAll(rec.Body)
-	if !strings.Contains(string(body), "Recent scans") {
-		t.Errorf("GET /scans: body should contain 'Recent scans': %s", body)
+	// Shell page: content is filled by app.js; layout nav contains "Scans"
+	if !strings.Contains(string(body), "Scans") {
+		t.Errorf("GET /scans: body should contain 'Scans': %s", body)
+	}
+	if !strings.Contains(string(body), "content") {
+		t.Errorf("GET /scans: body should contain content container for app.js: %s", body)
 	}
 }
 
@@ -97,10 +97,7 @@ func TestServer_404ForUnknown(t *testing.T) {
 func TestServer_RunContextCancelShutsDown(t *testing.T) {
 	os.Setenv(config.EnvPort, "0")
 	defer os.Unsetenv(config.EnvPort)
-	if os.Getenv(config.EnvDatabaseURL) == "" {
-		os.Setenv(config.EnvDatabaseURL, db.DefaultTestDatabaseURL)
-		defer os.Unsetenv(config.EnvDatabaseURL)
-	}
+	os.Setenv(config.EnvDatabaseURL, db.TestDatabaseURL())
 	database := db.TestPostgresDB(t)
 	cfg, err := config.Load()
 	if err != nil {

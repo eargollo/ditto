@@ -130,3 +130,59 @@ func TestUpsertFilesBatch_InsertFileScanBatch(t *testing.T) {
 		t.Errorf("batch insert sizes: a=%d b=%d", byPath["/tmp/a"].Size, byPath["/tmp/b"].Size)
 	}
 }
+
+func TestUpdateFilesDeletedAtForScan(t *testing.T) {
+	ctx := context.Background()
+	db := TestPostgresDB(t)
+
+	folderID, _ := AddFolder(ctx, db, "/tmp")
+	scan, _ := CreateScan(ctx, db, folderID)
+	// File a and b in scan; file c not in scan (same folder)
+	fileIDa, _ := UpsertFile(ctx, db, folderID, "a", 10, 0, ptrInt64(1), nil)
+	fileIDb, _ := UpsertFile(ctx, db, folderID, "b", 20, 0, ptrInt64(2), nil)
+	fileIDc, _ := UpsertFile(ctx, db, folderID, "c", 30, 0, ptrInt64(3), nil)
+	InsertFileScan(ctx, db, fileIDa, scan.ID)
+	InsertFileScan(ctx, db, fileIDb, scan.ID)
+	// c is not in file_scan for this scan
+
+	if err := UpdateScanCompletedAt(ctx, db, scan.ID, 2, 0); err != nil {
+		t.Fatalf("UpdateScanCompletedAt: %v", err)
+	}
+	if err := UpdateFilesDeletedAtForScan(ctx, db, scan.ID, folderID); err != nil {
+		t.Fatalf("UpdateFilesDeletedAtForScan: %v", err)
+	}
+
+	var deletedA, deletedB, deletedC interface{}
+	db.QueryRowContext(ctx, "SELECT deleted_at FROM files WHERE id = $1", fileIDa).Scan(&deletedA)
+	db.QueryRowContext(ctx, "SELECT deleted_at FROM files WHERE id = $1", fileIDb).Scan(&deletedB)
+	db.QueryRowContext(ctx, "SELECT deleted_at FROM files WHERE id = $1", fileIDc).Scan(&deletedC)
+	if deletedA != nil {
+		t.Errorf("file a (in scan) should have deleted_at NULL, got %v", deletedA)
+	}
+	if deletedB != nil {
+		t.Errorf("file b (in scan) should have deleted_at NULL, got %v", deletedB)
+	}
+	if deletedC == nil {
+		t.Errorf("file c (not in scan) should have deleted_at set, got nil")
+	}
+}
+
+func TestBackfillFilesDeletedAt(t *testing.T) {
+	ctx := context.Background()
+	db := TestPostgresDB(t)
+
+	folderID, _ := AddFolder(ctx, db, "/tmp")
+	scan, _ := CreateScan(ctx, db, folderID)
+	fileID, _ := UpsertFile(ctx, db, folderID, "a", 10, 0, ptrInt64(1), nil)
+	InsertFileScan(ctx, db, fileID, scan.ID)
+	_ = UpdateScanCompletedAt(ctx, db, scan.ID, 1, 0)
+
+	if err := BackfillFilesDeletedAt(ctx, db); err != nil {
+		t.Fatalf("BackfillFilesDeletedAt: %v", err)
+	}
+	var deleted interface{}
+	db.QueryRowContext(ctx, "SELECT deleted_at FROM files WHERE id = $1", fileID).Scan(&deleted)
+	if deleted != nil {
+		t.Errorf("file in latest completed scan should have deleted_at NULL after backfill, got %v", deleted)
+	}
+}
