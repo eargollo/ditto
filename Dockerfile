@@ -8,7 +8,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /ditto ./cmd/ditto
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s -X github.com/eargollo/ditto/internal/version.Version=${VERSION}" -o /ditto ./cmd/ditto
 
 # Runtime stage
 FROM alpine:3.20

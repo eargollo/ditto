@@ -22,14 +22,18 @@ run:
 db-reset:
 	docker exec ditto-postgres-dev psql -U ditto -d ditto -c "TRUNCATE duplicate_groups_hash, file_scan, files, scans, folders RESTART IDENTITY CASCADE;"
 
+# Version for -ldflags. Set VERSION= or use git describe (tag or commit).
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+LDFLAGS := -ldflags "-X github.com/eargollo/ditto/internal/version.Version=$(VERSION)"
+
 .PHONY: build
 build:
-	go build -o ditto ./cmd/ditto
+	go build $(LDFLAGS) -o ditto ./cmd/ditto
 
 # Cross-compile for Windows (64-bit). Output: ditto.exe
 .PHONY: build-windows
 build-windows:
-	GOOS=windows GOARCH=amd64 go build -o ditto.exe ./cmd/ditto
+	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o ditto.exe ./cmd/ditto
 
 # Static analysis: gosec (same as .github/workflows/security.yml).
 .PHONY: gosec

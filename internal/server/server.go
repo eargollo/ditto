@@ -22,6 +22,7 @@ import (
 	"github.com/eargollo/ditto/internal/db"
 	"github.com/eargollo/ditto/internal/hash"
 	"github.com/eargollo/ditto/internal/scan"
+	"github.com/eargollo/ditto/internal/version"
 )
 
 //go:embed templates/*
@@ -150,6 +151,7 @@ func (s *Server) routes() {
 type pageData struct {
 	Content template.HTML
 	Data    interface{}
+	Version string
 }
 
 func (s *Server) renderPage(w http.ResponseWriter, layoutName, contentName string, data interface{}) {
@@ -159,7 +161,7 @@ func (s *Server) renderPage(w http.ResponseWriter, layoutName, contentName strin
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	page := pageData{Content: template.HTML(contentBuf.Bytes()), Data: data} // #nosec G203 -- content from our own templates, not user input
+	page := pageData{Content: template.HTML(contentBuf.Bytes()), Data: data, Version: version.Version} // #nosec G203 -- content from our own templates, not user input
 	var layoutBuf bytes.Buffer
 	if err := s.tmpl.ExecuteTemplate(&layoutBuf, layoutName, page); err != nil {
 		log.Printf("error: render page layout %q: %v", layoutName, err)
