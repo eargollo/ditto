@@ -2,7 +2,6 @@ package hash
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -66,34 +65,54 @@ func (o *HashOptions) maxHashesPerSecond() int {
 // RunHashPhase runs the hash phase for the given scan: resets any orphaned 'hashing' to 'pending',
 // sets hash_started_at, then runs a producer-consumer pipeline (one query streams pending jobs to a channel,
 // N workers process them). Sets hash_completed_at when done. Respects context cancellation.
-func RunHashPhase(ctx context.Context, database *sql.DB, scanID int64, opts *HashOptions) error {
-	if err := db.ResetHashStatusHashingToPending(ctx, database, scanID); err != nil {
+func RunHashPhase(ctx context.Context, q db.Querier, scanID int64, opts *HashOptions) error {
+	if err := db.ResetHashStatusHashingToPendingGlobal(ctx, q); err != nil {
 		return err
 	}
-	if err := db.UpdateScanHashStartedAt(ctx, database, scanID); err != nil {
+	if err := db.UpdateScanHashStartedAt(ctx, q, scanID); err != nil {
 		return err
 	}
-	total, _ := db.CountHashCandidates(ctx, database, scanID) // best-effort for progress; 0 on error
+	// Files already 'done' in this scan were not set to pending (mtime unchanged); count them as reused (no read).
+	initialDoneCount, _, _ := db.GetHashedFileCountAndBytes(ctx, q, scanID)
+	// Use global candidate count so we also hash pending files from previous scans whose size is now duplicate (e.g. scenario 8).
+	total, _ := db.CountHashCandidatesGlobal(ctx, q)
 	n := opts.workers()
 	log.Printf("[hash] phase started for scan %d (%d worker(s), %d files to hash)", scanID, n, total)
 	phaseStart := time.Now().UTC()
 	var completed, reusedCount, hashErrorCount atomic.Int64
-	err := runHashPhaseProducerConsumer(ctx, database, scanID, total, &completed, &reusedCount, &hashErrorCount, phaseStart, opts, n)
+	err := runHashPhaseProducerConsumer(ctx, q, scanID, total, initialDoneCount, &completed, &reusedCount, &hashErrorCount, phaseStart, opts, n)
 	if err != nil {
 		log.Printf("[hash] phase failed for scan %d: %v", scanID, err)
 		return err
 	}
-	fileCount, byteCount, err := db.GetHashedFileCountAndBytes(ctx, database, scanID)
-	if err != nil {
-		return err
+	totalReused := initialDoneCount + reusedCount.Load()
+	errCount := hashErrorCount.Load()
+	fileCount, byteCount, _ := db.GetHashedFileCountAndBytes(ctx, q, scanID)
+	log.Printf("[hash] phase completed for scan %d: %d files, %d bytes, %d reused, %d errors", scanID, fileCount, byteCount, totalReused, errCount)
+	// Always update the triggering scan so hash_completed_at is set even when 0 files hashed (e.g. scan 1 with unique sizes).
+	_ = db.UpdateScanHashStats(ctx, q, scanID, fileCount, byteCount, totalReused, errCount)
+	// Refresh hash stats for other scans that have hashed files (we may have hashed files from previous scans in this phase).
+	scanIDs, _ := db.ScanIDsWithHashedFiles(ctx, q)
+	for _, sid := range scanIDs {
+		if sid == scanID {
+			continue
+		}
+		c, b, err := db.GetHashedFileCountAndBytes(ctx, q, sid)
+		if err != nil {
+			continue
+		}
+		_ = db.UpdateScanHashStats(ctx, q, sid, c, b, 0, 0)
 	}
-	log.Printf("[hash] phase completed for scan %d: %d files, %d bytes, %d reused, %d errors", scanID, fileCount, byteCount, reusedCount.Load(), hashErrorCount.Load())
-	return db.UpdateScanHashCompletedAt(ctx, database, scanID, fileCount, byteCount, reusedCount.Load(), hashErrorCount.Load())
+	if err := db.PrecomputeDuplicateGroupsHash(ctx, q); err != nil {
+		log.Printf("[hash] precompute duplicate groups failed: %v", err)
+	}
+	return nil
 }
 
 // runHashProgressUpdater writes hashed_file_count, hashed_byte_count, hash_reused_count, hash_error_count
 // to the scan row periodically so the UI shows live progress. Exits when progressDone is closed or ctx is cancelled.
-func runHashProgressUpdater(ctx context.Context, database *sql.DB, scanID int64, progressDone <-chan struct{}, reusedCount, hashErrorCount *atomic.Int64) {
+// initialReused is added to reusedCount so "reused" includes files that were already done (not queued).
+func runHashProgressUpdater(ctx context.Context, q db.Querier, scanID int64, progressDone <-chan struct{}, initialReused int64, reusedCount, hashErrorCount *atomic.Int64) {
 	ticker := time.NewTicker(hashProgressUpdateInterval)
 	defer ticker.Stop()
 	for {
@@ -103,30 +122,37 @@ func runHashProgressUpdater(ctx context.Context, database *sql.DB, scanID int64,
 		case <-progressDone:
 			return
 		case <-ticker.C:
-			fileCount, byteCount, err := db.GetHashedFileCountAndBytes(ctx, database, scanID)
+			fileCount, byteCount, err := db.GetHashedFileCountAndBytes(ctx, q, scanID)
 			if err != nil {
 				continue
 			}
-			_ = db.UpdateScanHashProgress(ctx, database, scanID, fileCount, byteCount, reusedCount.Load(), hashErrorCount.Load())
+			totalReused := initialReused + reusedCount.Load()
+			_ = db.UpdateScanHashProgress(ctx, q, scanID, fileCount, byteCount, totalReused, hashErrorCount.Load())
 		}
 	}
 }
 
 // runHashPhaseProducerConsumer: one producer sends pending jobs to a bounded channel;
 // N consumers process jobs and send hash results to a batch writer; writer flushes to DB in batches.
-func runHashPhaseProducerConsumer(ctx context.Context, database *sql.DB, scanID int64, total int64, completed, reusedCount, hashErrorCount *atomic.Int64, phaseStart time.Time, opts *HashOptions, numWorkers int) error {
+// initialReused is the count of files in this scan already 'done' (unchanged mtime); added to reusedCount for display.
+func runHashPhaseProducerConsumer(ctx context.Context, q db.Querier, scanID int64, total int64, initialReused int64, completed, reusedCount, hashErrorCount *atomic.Int64, phaseStart time.Time, opts *HashOptions, numWorkers int) error {
 	jobs := make(chan *db.File, hashJobChannelCap)
 	results := make(chan db.HashUpdate, hashJobChannelCap)
 	errCh := make(chan error, 1)
 	progressDone := make(chan struct{})
 
 	// Live progress: update scan row periodically so the UI shows hash stats (like scan file_count).
-	go runHashProgressUpdater(ctx, database, scanID, progressDone, reusedCount, hashErrorCount)
+	go runHashProgressUpdater(ctx, q, scanID, progressDone, initialReused, reusedCount, hashErrorCount)
 
-	// Producer: stream pending jobs; close when done.
+	// Producer: stream pending jobs from any scan (global queue). Deduplicate by file ID so we hash each file only once (same file can appear in multiple scans).
 	go func() {
 		defer close(jobs)
-		err := db.ForEachPendingHashJob(ctx, database, scanID, func(f *db.File) error {
+		seen := make(map[int64]struct{})
+		err := db.ForEachPendingHashJobGlobal(ctx, q, func(f *db.File) error {
+			if _, ok := seen[f.ID]; ok {
+				return nil
+			}
+			seen[f.ID] = struct{}{}
 			select {
 			case jobs <- f:
 				return nil
@@ -153,7 +179,7 @@ func runHashPhaseProducerConsumer(ctx context.Context, database *sql.DB, scanID 
 				return
 			}
 			t0 := time.Now()
-			if err := db.UpdateFileHashBatch(ctx, database, batch); err != nil {
+			if err := db.UpdateFileHashBatch(ctx, q, batch); err != nil {
 				select {
 				case errCh <- err:
 				default:
@@ -195,12 +221,12 @@ func runHashPhaseProducerConsumer(ctx context.Context, database *sql.DB, scanID 
 				if ctx.Err() != nil {
 					return
 				}
-				reused, update, err := processClaimedJob(ctx, database, job, opts, now, limiter)
+				reused, update, err := processClaimedJob(ctx, q, job, opts, now, limiter)
 				if err != nil {
 					if hashErrorCount != nil {
 						hashErrorCount.Add(1)
 					}
-					_ = db.ResetFileHashStatusToPending(ctx, database, job.ID)
+					_ = db.ResetFileHashStatusToPending(ctx, q, job.ID)
 					select {
 					case errCh <- err:
 					default:
@@ -234,28 +260,46 @@ func runHashPhaseProducerConsumer(ctx context.Context, database *sql.DB, scanID 
 }
 
 // processClaimedJob hashes the file (or reuses inode/previous hash). Returns (reused, update, nil) on success; update is sent to batch writer.
-func processClaimedJob(ctx context.Context, database *sql.DB, job *db.File, opts *HashOptions, now time.Time, limiter *rate.Limiter) (reused bool, update *db.HashUpdate, err error) {
-	// Same-scan inode reuse (hardlink)
-	t0 := time.Now()
-	h, err := db.HashForInode(ctx, database, job.ScanID, job.Inode, job.DeviceID)
-	logSlowIf("HashForInode", t0)
-	if err != nil {
-		return false, nil, err
-	}
-	if h != "" {
-		logFileIfThrottled("[hash] reused (inode) %s [%s]", job.Path, filepath.Base(job.Path))
-		return true, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now}, nil
-	}
-	// Previous-scan unchanged file reuse
-	t2 := time.Now()
-	h, err = db.HashForInodeFromPreviousScan(ctx, database, job.ScanID, job.Inode, job.DeviceID, job.Size)
-	logSlowIf("HashForInodeFromPreviousScan", t2)
-	if err != nil {
-		return false, nil, err
-	}
-	if h != "" {
-		logFileIfThrottled("[hash] reused (unchanged) %s [%s]", job.Path, filepath.Base(job.Path))
-		return true, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now}, nil
+func processClaimedJob(ctx context.Context, q db.Querier, job *db.File, opts *HashOptions, now time.Time, limiter *rate.Limiter) (reused bool, update *db.HashUpdate, err error) {
+	var h string
+	// If this file's hash was cleared (set to pending because mtime/size changed), we must re-read from disk.
+	// Otherwise we could reuse a stale hash and miss content changes (e.g. scenario 3: B same size, different content).
+	if job.Hash != nil {
+		// Same-scan inode reuse (hardlink)
+		t0 := time.Now()
+		h, err = db.HashForInode(ctx, q, job.ScanID, job.Inode, job.DeviceID)
+		logSlowIf("HashForInode", t0)
+		if err != nil {
+			return false, nil, err
+		}
+		if h != "" {
+			logFileIfThrottled("[hash] reused (inode) %s [%s]", job.Path, filepath.Base(job.Path))
+			return true, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now, Mtime: job.MTime}, nil
+		}
+		// Previous-scan unchanged file reuse (inode+device+size)
+		t2 := time.Now()
+		h, err = db.HashForInodeFromPreviousScan(ctx, q, job.ScanID, job.Inode, job.DeviceID, job.Size)
+		logSlowIf("HashForInodeFromPreviousScan", t2)
+		if err != nil {
+			return false, nil, err
+		}
+		if h != "" {
+			logFileIfThrottled("[hash] reused (unchanged) %s [%s]", job.Path, filepath.Base(job.Path))
+			return true, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now, Mtime: job.MTime}, nil
+		}
+		// When inode is nil (e.g. Windows/network), reuse by path+size from any file that already has a hash.
+		if job.Inode == nil && job.RelPath != "" {
+			t3 := time.Now()
+			h, err = db.HashForPathSize(ctx, q, job.RelPath, job.Size)
+			logSlowIf("HashForPathSize", t3)
+			if err != nil {
+				return false, nil, err
+			}
+			if h != "" {
+				logFileIfThrottled("[hash] reused (path+size) %s [%s]", job.Path, filepath.Base(job.Path))
+				return true, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now, Mtime: job.MTime}, nil
+			}
+		}
 	}
 	// Throttle before reading
 	if limiter != nil {
@@ -270,7 +314,7 @@ func processClaimedJob(ctx context.Context, database *sql.DB, job *db.File, opts
 		return false, nil, err
 	}
 	logFileIfThrottled("[hash] hashed %s [%s]", job.Path, filepath.Base(job.Path))
-	return false, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now}, nil
+	return false, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now, Mtime: job.MTime}, nil
 }
 
 // progressLog logs "N/M files (X%)" and optionally ETA every hashProgressLogInterval or when done.

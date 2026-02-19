@@ -20,7 +20,7 @@
         <tr class="border-t border-gray-200">
           <td class="px-4 py-2 font-mono text-sm text-gray-700">{{.Hash}}</td>
           <td class="px-4 py-2">{{.Count}}</td>
-          <td class="px-4 py-2">{{.Size}}</td>
+          <td class="px-4 py-2">{{formatBytes .Size}}</td>
           <td class="px-4 py-2"><a href="/scans/{{$.ScanID}}/duplicates/hash/{{.Hash}}" class="text-blue-600 hover:underline">View files</a></td>
         </tr>
         {{end}}
@@ -52,7 +52,7 @@
           <td class="px-4 py-2">{{.Inode}}</td>
           <td class="px-4 py-2">{{if .DeviceID}}{{.DeviceID}}{{else}}—{{end}}</td>
           <td class="px-4 py-2">{{.Count}}</td>
-          <td class="px-4 py-2">{{.Size}}</td>
+          <td class="px-4 py-2">{{formatBytes .Size}}</td>
           <td class="px-4 py-2"><a href="/scans/{{$.ScanID}}/duplicates/inode?inode={{.Inode}}{{if .DeviceID}}&device_id={{.DeviceID}}{{end}}" class="text-blue-600 hover:underline">View files</a></td>
         </tr>
         {{end}}
@@ -68,7 +68,7 @@
 {{define "duplicate-group-content"}}
 <h1 class="text-2xl font-bold text-gray-900">Duplicate group (hash)</h1>
 <p class="mt-1 font-mono text-sm text-gray-600">{{.Hash}}</p>
-<p class="mt-2">{{if eq .ScanID 0}}<a href="/?scan_id=0" class="text-blue-600 hover:underline">← Back to duplicates (All)</a>{{else}}<a href="/scans/{{.ScanID}}/duplicates" class="text-blue-600 hover:underline">← Back to duplicates</a>{{end}}</p>
+<p class="mt-2">{{if eq .ScanID 0}}<a href="/" class="text-blue-600 hover:underline">← Back to duplicates</a>{{else}}<a href="/scans/{{.ScanID}}/duplicates" class="text-blue-600 hover:underline">← Back to duplicates</a>{{end}}</p>
 <div class="mt-4 overflow-x-auto">
   <table class="min-w-full border border-gray-200 rounded">
     <thead class="bg-gray-50">
@@ -83,7 +83,7 @@
       <tr class="border-t border-gray-200">
         <td class="px-4 py-2 text-gray-800">{{.Path}}</td>
         {{if $.RootPathByScanID}}<td class="px-4 py-2 text-gray-600">{{index $.RootPathByScanID .ScanID}}</td>{{end}}
-        <td class="px-4 py-2">{{.Size}}</td>
+        <td class="px-4 py-2">{{formatBytes .Size}}</td>
       </tr>
       {{end}}
     </tbody>
@@ -107,7 +107,7 @@
       {{range .Files}}
       <tr class="border-t border-gray-200">
         <td class="px-4 py-2 text-gray-800">{{.Path}}</td>
-        <td class="px-4 py-2">{{.Size}}</td>
+        <td class="px-4 py-2">{{formatBytes .Size}}</td>
       </tr>
       {{end}}
     </tbody>

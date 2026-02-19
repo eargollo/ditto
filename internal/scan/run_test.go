@@ -2,7 +2,6 @@ package scan
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +11,7 @@ import (
 	"github.com/eargollo/ditto/internal/db"
 )
 
-func runTestDB(t *testing.T) *sql.DB {
+func runTestDB(t *testing.T) db.Querier {
 	t.Helper()
 	return db.TestPostgresDB(t)
 }

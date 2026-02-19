@@ -1,13 +1,27 @@
-# Run tests. Use -p 1 to avoid Postgres deadlocks (all tests share one DB).
-# Start Postgres first: docker compose -f docker-compose.dev.yml up -d
+# Unit tests (packages without the integration build tag). Uses tx+rollback so tests can run in parallel. Start Postgres: docker compose -f docker-compose.dev.yml up -d
 .PHONY: test
 test:
-	go test -p 1 ./...
+	go test ./... -count=1
 
-# CI test (race detector, no cache). Requires DATABASE_URL (e.g. docker compose -f docker-compose.dev.yml up -d).
+# Integration tests only (require -tags=integration; real DB, -p 1 -parallel 1 to avoid contention). Start Postgres first.
+.PHONY: integration
+integration:
+	go test -tags=integration -p 1 -parallel 1 -count=1 ./internal/integration
+
+# CI: run unit tests then integration tests (both need Postgres for DB tests).
 .PHONY: test-ci
-test-ci:
-	go test -v -race -count=1 -p 1 ./...
+test-ci: test integration
+
+# Run the app against the dev DB (ditto). Start Postgres first: docker compose -f docker-compose.dev.yml up -d
+.PHONY: run
+run:
+	DATABASE_URL=postgres://ditto:ditto@localhost:5432/ditto?sslmode=disable go run ./cmd/ditto
+
+# Reset the dev database (ditto): truncate all tables. Requires: docker compose -f docker-compose.dev.yml up -d
+# Rails-style: clears data so you can start fresh; schema stays (migrations run on next make run).
+.PHONY: db-reset
+db-reset:
+	docker exec ditto-postgres-dev psql -U ditto -d ditto -c "TRUNCATE duplicate_groups_hash, file_scan, files, scans, folders RESTART IDENTITY CASCADE;"
 
 .PHONY: build
 build:

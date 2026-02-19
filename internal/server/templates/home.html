@@ -2,17 +2,10 @@
 <h1 class="text-2xl font-bold text-gray-900">Duplicate groups</h1>
 <p class="mt-1 text-gray-600">Files grouped by identical content, ordered by group size. <a href="/scans" class="text-blue-600 hover:underline">Scans</a>.</p>
 
-{{if .Roots}}
-<form method="get" action="/" class="mt-4 flex flex-wrap items-center gap-4">
-  <label class="text-gray-700">Folder (latest scan):</label>
-  <select name="scan_id" onchange="this.form.submit()" class="rounded border border-gray-300 px-3 py-2 min-w-[200px] max-w-full">
-    <option value="0" {{if eq $.SelectedScan 0}}selected{{end}}>All (latest per folder)</option>
-    {{range .Roots}}
-    <option value="{{.ScanID}}" {{if eq $.SelectedScan .ScanID}}selected{{end}}>{{.RootPath}}</option>
-    {{end}}
-  </select>
-  <input type="hidden" name="page" value="1" />
-</form>
+<div class="mt-4 p-4 rounded-lg bg-gray-50 border border-gray-200">
+  <p class="text-gray-800 font-medium">Summary</p>
+  <p class="mt-1 text-gray-600">{{.Summary.GroupCount}} duplicate group{{if ne .Summary.GroupCount 1}}s{{end}} · {{.Summary.TotalFiles}} duplicated file{{if ne .Summary.TotalFiles 1}}s{{end}} · {{formatBytes .Summary.ReclaimableSize}} can be saved</p>
+</div>
 
 {{if .Groups}}
 <div class="mt-6 space-y-6">
@@ -20,7 +13,7 @@
   <section class="border border-gray-200 rounded-lg bg-white overflow-hidden">
     <div class="px-4 py-3 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center gap-4">
       <span class="font-semibold text-gray-800">{{.Count}} file{{if gt .Count 1}}s{{end}} · {{formatBytes .PerFileSize}} each · {{formatBytes .Size}} group total</span>
-      <a href="/scans/{{$.SelectedScan}}/duplicates/hash/{{.Hash}}" class="text-sm text-blue-600 hover:underline">View group details</a>
+      <a href="/duplicates/hash/{{.Hash}}" class="text-sm text-blue-600 hover:underline">View group details</a>
     </div>
     <div class="px-4 py-3">
       <div class="space-y-1">
@@ -30,7 +23,7 @@
       </div>
     </div>
     {{if .PathsTruncated}}
-    <p class="px-4 py-2 text-sm text-gray-500 border-t border-gray-200">First {{len .Paths}} shown. <a href="/scans/{{$.SelectedScan}}/duplicates/hash/{{.Hash}}" class="text-blue-600 hover:underline">View all {{.Count}} files</a></p>
+    <p class="px-4 py-2 text-sm text-gray-500 border-t border-gray-200">First {{len .Paths}} shown. <a href="/duplicates/hash/{{.Hash}}" class="text-blue-600 hover:underline">View all {{.Count}} files</a></p>
     {{end}}
   </section>
   {{end}}
@@ -40,18 +33,14 @@
 <nav class="mt-6 flex items-center gap-2 flex-wrap">
   <span class="text-gray-600 text-sm">Page {{.Page}} of {{.TotalPages}} ({{.TotalGroups}} groups)</span>
   {{if .PrevPage}}
-  <a href="/?scan_id={{.SelectedScan}}&page={{.PrevPage}}" class="px-3 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">Prev</a>
+  <a href="/?page={{.PrevPage}}" class="px-3 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">Prev</a>
   {{end}}
   {{if .NextPage}}
-  <a href="/?scan_id={{.SelectedScan}}&page={{.NextPage}}" class="px-3 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">Next</a>
+  <a href="/?page={{.NextPage}}" class="px-3 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">Next</a>
   {{end}}
 </nav>
 {{end}}
 {{else}}
-<p class="mt-4 text-gray-500">{{if eq $.SelectedScan 0}}No duplicate groups across these folders.{{else}}No duplicate groups in this scan.{{end}}</p>
-{{end}}
-
-{{else}}
-<p class="mt-4 text-gray-500">No scans yet. <a href="/scans" class="text-blue-600 hover:underline">Start a scan</a>.</p>
+<p class="mt-4 text-gray-500">No duplicate groups. <a href="/scans" class="text-blue-600 hover:underline">Start a scan</a> to find duplicates.</p>
 {{end}}
 {{end}}

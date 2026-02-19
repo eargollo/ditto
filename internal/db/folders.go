@@ -16,8 +16,8 @@ type Folder struct {
 }
 
 // ListFolders returns all folders (scan roots) ordered by id ascending.
-func ListFolders(ctx context.Context, database *sql.DB) ([]Folder, error) {
-	rows, err := database.QueryContext(ctx,
+func ListFolders(ctx context.Context, q Querier) ([]Folder, error) {
+	rows, err := q.QueryContext(ctx,
 		"SELECT id, path, created_at FROM folders ORDER BY id")
 	if err != nil {
 		return nil, err
@@ -38,23 +38,23 @@ func ListFolders(ctx context.Context, database *sql.DB) ([]Folder, error) {
 }
 
 // AddFolder inserts a new folder and returns its id. Path is normalized to absolute before storing.
-func AddFolder(ctx context.Context, database *sql.DB, path string) (int64, error) {
+func AddFolder(ctx context.Context, q Querier, path string) (int64, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return 0, err
 	}
 	path = filepath.Clean(path)
 	var id int64
-	err = database.QueryRowContext(ctx,
+	err = q.QueryRowContext(ctx,
 		"INSERT INTO folders (path, created_at) VALUES ($1, $2) RETURNING id",
 		path, NowUTC()).Scan(&id)
 	return id, err
 }
 
 // GetFolder returns the folder with the given id, or sql.ErrNoRows if not found.
-func GetFolder(ctx context.Context, database *sql.DB, id int64) (*Folder, error) {
+func GetFolder(ctx context.Context, q Querier, id int64) (*Folder, error) {
 	var f Folder
-	err := database.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		"SELECT id, path, created_at FROM folders WHERE id = $1", id).
 		Scan(&f.ID, &f.Path, &f.CreatedAt)
 	if err != nil {
@@ -64,8 +64,8 @@ func GetFolder(ctx context.Context, database *sql.DB, id int64) (*Folder, error)
 }
 
 // DeleteFolder removes the folder with the given id. Returns false if no row was deleted.
-func DeleteFolder(ctx context.Context, database *sql.DB, id int64) (bool, error) {
-	res, err := database.ExecContext(ctx, "DELETE FROM folders WHERE id = $1", id)
+func DeleteFolder(ctx context.Context, q Querier, id int64) (bool, error) {
+	res, err := q.ExecContext(ctx, "DELETE FROM folders WHERE id = $1", id)
 	if err != nil {
 		return false, err
 	}
@@ -75,19 +75,19 @@ func DeleteFolder(ctx context.Context, database *sql.DB, id int64) (bool, error)
 
 // GetOrCreateFolderByPath returns the folder id for the given path, creating the folder if it does not exist.
 // Path is normalized to absolute before lookup and when creating, so folders are always stored by absolute path.
-func GetOrCreateFolderByPath(ctx context.Context, database *sql.DB, path string) (int64, error) {
+func GetOrCreateFolderByPath(ctx context.Context, q Querier, path string) (int64, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return 0, err
 	}
 	path = filepath.Clean(path)
 	var id int64
-	err = database.QueryRowContext(ctx, "SELECT id FROM folders WHERE path = $1", path).Scan(&id)
+	err = q.QueryRowContext(ctx, "SELECT id FROM folders WHERE path = $1", path).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
 	if err != sql.ErrNoRows {
 		return 0, err
 	}
-	return AddFolder(ctx, database, path)
+	return AddFolder(ctx, q, path)
 }

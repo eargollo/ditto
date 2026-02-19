@@ -46,6 +46,9 @@ func main() {
 	if err := db.MigratePostgres(database); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
+	if err := db.BackfillFilesDeletedAt(context.Background(), database); err != nil {
+		log.Printf("backfill deleted_at: %v", err)
+	}
 
 	if len(os.Args) >= 3 && os.Args[1] == "scan" {
 		runScan(context.Background(), database, os.Args[2])

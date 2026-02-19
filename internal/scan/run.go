@@ -2,11 +2,11 @@ package scan
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/eargollo/ditto/internal/db"
 )
@@ -19,7 +19,7 @@ type ScanOptions struct {
 
 // RunScan walks rootPath, ensures a folder exists for it, creates a scan, upserts files and ledger rows, then sets the scan's completed_at.
 // Uses the parallel pipeline (multiple walkers, batched DB writers). rootPath must be an existing directory. Returns scanID or error.
-func RunScan(ctx context.Context, database *sql.DB, rootPath string, opts *ScanOptions) (int64, error) {
+func RunScan(ctx context.Context, q db.Querier, rootPath string, opts *ScanOptions) (int64, error) {
 	rootPath = filepath.Clean(rootPath)
 	info, err := os.Stat(rootPath)
 	if err != nil {
@@ -29,36 +29,44 @@ func RunScan(ctx context.Context, database *sql.DB, rootPath string, opts *ScanO
 		return 0, errors.New("root path is not a directory")
 	}
 
-	folderID, err := db.GetOrCreateFolderByPath(ctx, database, rootPath)
+	folderID, err := db.GetOrCreateFolderByPath(ctx, q, rootPath)
 	if err != nil {
 		return 0, err
 	}
-	folder, err := db.GetFolder(ctx, database, folderID)
+	folder, err := db.GetFolder(ctx, q, folderID)
 	if err != nil {
 		return 0, err
 	}
 	folderPath := folder.Path
 
-	s, err := db.CreateScan(ctx, database, folderID)
+	s, err := db.CreateScan(ctx, q, folderID)
 	if err != nil {
 		return 0, err
 	}
 	scanID := s.ID
 
 	log.Printf("[scan] started for scan %d path %s (pipeline)", scanID, rootPath)
-	fileCount, skippedScan, _, err := RunPipeline(ctx, database, scanID, folderID, rootPath, folderPath, opts, nil)
+	fileCount, skippedScan, _, err := RunPipeline(ctx, q, scanID, folderID, rootPath, folderPath, opts, nil)
 	if err != nil {
 		return 0, err
 	}
-	if err := db.UpdateScanCompletedAt(ctx, database, scanID, fileCount, skippedScan); err != nil {
+	if err := db.UpdateScanCompletedAt(ctx, q, scanID, fileCount, skippedScan); err != nil {
 		return 0, err
+	}
+	start := time.Now()
+	if err := db.UpdateFilesDeletedAtForScan(ctx, q, scanID, folderID); err != nil {
+		log.Printf("[scan] deleted_at update failed for scan %d: %v", scanID, err)
+	} else {
+		d := time.Since(start).Milliseconds()
+		_ = db.UpdateScanDeletedAtUpdateDuration(ctx, q, scanID, d)
+		log.Printf("[scan] deleted_at update for scan %d took %d ms", scanID, d)
 	}
 	return scanID, nil
 }
 
 // RunScanForExisting walks rootPath and upserts files + ledger for the existing scan (scanID). Use when the scan row was already created.
 // Uses the parallel pipeline (multiple walkers, batched DB writers).
-func RunScanForExisting(ctx context.Context, database *sql.DB, scanID int64, folderID int64, rootPath string, opts *ScanOptions) error {
+func RunScanForExisting(ctx context.Context, q db.Querier, scanID int64, folderID int64, rootPath string, opts *ScanOptions) error {
 	rootPath = filepath.Clean(rootPath)
 	info, err := os.Stat(rootPath)
 	if err != nil {
@@ -67,15 +75,26 @@ func RunScanForExisting(ctx context.Context, database *sql.DB, scanID int64, fol
 	if !info.IsDir() {
 		return errors.New("root path is not a directory")
 	}
-	folder, err := db.GetFolder(ctx, database, folderID)
+	folder, err := db.GetFolder(ctx, q, folderID)
 	if err != nil {
 		return err
 	}
 	folderPath := folder.Path
 
-	fileCount, skippedScan, _, err := RunPipeline(ctx, database, scanID, folderID, rootPath, folderPath, opts, nil)
+	fileCount, skippedScan, _, err := RunPipeline(ctx, q, scanID, folderID, rootPath, folderPath, opts, nil)
 	if err != nil {
 		return err
 	}
-	return db.UpdateScanCompletedAt(ctx, database, scanID, fileCount, skippedScan)
+	if err := db.UpdateScanCompletedAt(ctx, q, scanID, fileCount, skippedScan); err != nil {
+		return err
+	}
+	start := time.Now()
+	if err := db.UpdateFilesDeletedAtForScan(ctx, q, scanID, folderID); err != nil {
+		log.Printf("[scan] deleted_at update failed for scan %d: %v", scanID, err)
+	} else {
+		d := time.Since(start).Milliseconds()
+		_ = db.UpdateScanDeletedAtUpdateDuration(ctx, q, scanID, d)
+		log.Printf("[scan] deleted_at update for scan %d took %d ms", scanID, d)
+	}
+	return nil
 }

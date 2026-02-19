@@ -10,7 +10,10 @@
 2. **Symlinks: skip**
    - Do not follow symlinks; do not hash them. Scan records the path but does not treat the target as part of the tree for hashing. This avoids following links outside the scan root and keeps semantics simple.
 
-3. **Hardlinks: reuse the known hash, no extra hashing**
+3. **Duplicates are global across all folders**
+   - The product supports multiple folders (each scanned separately). Duplicate groups are **not** per folder: we find duplicates among all scanned files from all folders. A group can contain files from different folders (cross-folder duplicates). The hash phase uses a global duplicate-size queue so files from previously scanned folders get hashed when a later scan introduces the same size, enabling these cross-folder groups.
+
+4. **Hardlinks: reuse the known hash, no extra hashing**
    - Hardlinks are multiple paths pointing to the same inode (same content by definition). They do not use extra disk space, so the main goal of Ditto (freeing space) does not apply to them; we still report hardlink groups so users can see “these paths are the same file” and optionally remove redundant paths.
    - **Do not hash a path whose inode we have already hashed.** When we encounter a path with an inode that already has a stored hash (from another path in the same scan), assign that existing hash to this path so the file appears in the same duplicate group without reading content again. So: one hash per inode; all paths sharing that inode get the same “known hash” and are reported as one group (e.g. “Hardlinked” or grouped with content duplicates if we use hash as the group key).
 

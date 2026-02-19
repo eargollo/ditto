@@ -128,3 +128,45 @@ func TestGetLatestIncompleteScanForFolder(t *testing.T) {
 		t.Errorf("other folder: got %d, want 0", id)
 	}
 }
+
+func TestGetLatestCompletedScanIDForFolder(t *testing.T) {
+	db := TestPostgresDB(t)
+	ctx := context.Background()
+
+	fooID, _ := AddFolder(ctx, db, "/foo")
+	id, err := GetLatestCompletedScanIDForFolder(ctx, db, fooID)
+	if err != nil {
+		t.Fatalf("GetLatestCompletedScanIDForFolder: %v", err)
+	}
+	if id != 0 {
+		t.Errorf("no completed scan: got %d, want 0", id)
+	}
+
+	s1, _ := CreateScan(ctx, db, fooID)
+	_ = UpdateScanCompletedAt(ctx, db, s1.ID, 0, 0)
+	id, err = GetLatestCompletedScanIDForFolder(ctx, db, fooID)
+	if err != nil {
+		t.Fatalf("GetLatestCompletedScanIDForFolder: %v", err)
+	}
+	if id != s1.ID {
+		t.Errorf("one completed: got %d, want %d", id, s1.ID)
+	}
+}
+
+func TestUpdateScanDeletedAtUpdateDuration(t *testing.T) {
+	db := TestPostgresDB(t)
+	ctx := context.Background()
+
+	folderID, _ := AddFolder(ctx, db, "/tmp")
+	scan, _ := CreateScan(ctx, db, folderID)
+	if err := UpdateScanDeletedAtUpdateDuration(ctx, db, scan.ID, 123); err != nil {
+		t.Fatalf("UpdateScanDeletedAtUpdateDuration: %v", err)
+	}
+	got, err := GetScan(ctx, db, scan.ID)
+	if err != nil {
+		t.Fatalf("GetScan: %v", err)
+	}
+	if got.DeletedAtUpdateDurationMs == nil || *got.DeletedAtUpdateDurationMs != 123 {
+		t.Errorf("DeletedAtUpdateDurationMs = %v, want 123", got.DeletedAtUpdateDurationMs)
+	}
+}

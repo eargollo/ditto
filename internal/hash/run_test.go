@@ -2,7 +2,6 @@ package hash
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,21 +12,21 @@ import (
 	"github.com/eargollo/ditto/internal/db"
 )
 
-func testDB(t *testing.T) *sql.DB {
+func testDB(t *testing.T) db.Querier {
 	t.Helper()
 	return db.TestPostgresDB(t)
 }
 
 // addFileToScan inserts a file into the scan (folder from dir, relative path from absPath).
-func addFileToScan(ctx context.Context, database *sql.DB, dir string, scanID int64, absPath string, size, mtime, inode int64, deviceID *int64) {
-	folderID, _ := db.GetOrCreateFolderByPath(ctx, database, dir)
+func addFileToScan(ctx context.Context, q db.Querier, dir string, scanID int64, absPath string, size, mtime, inode int64, deviceID *int64) {
+	folderID, _ := db.GetOrCreateFolderByPath(ctx, q, dir)
 	rel, _ := filepath.Rel(dir, absPath)
 	if rel == "" || rel == "." {
 		rel = filepath.Base(absPath)
 	}
 	inodePtr := &inode
-	fileID, _ := db.UpsertFile(ctx, database, folderID, rel, size, mtime, inodePtr, deviceID)
-	_ = db.InsertFileScan(ctx, database, fileID, scanID)
+	fileID, _ := db.UpsertFile(ctx, q, folderID, rel, size, mtime, inodePtr, deviceID)
+	_ = db.InsertFileScan(ctx, q, fileID, scanID)
 }
 
 func TestRunHashPhase_fillsHashForDuplicateCandidatesOnly(t *testing.T) {
@@ -137,8 +136,14 @@ func TestRunHashPhase_setsHashMetricsOnScan(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	folderID, _ := db.GetOrCreateFolderByPath(ctx, database, dir)
-	scan, _ := db.CreateScan(ctx, database, folderID)
+	folderID, err := db.GetOrCreateFolderByPath(ctx, database, dir)
+	if err != nil {
+		t.Fatalf("GetOrCreateFolderByPath: %v", err)
+	}
+	scan, err := db.CreateScan(ctx, database, folderID)
+	if err != nil || scan == nil {
+		t.Fatalf("CreateScan: %v", err)
+	}
 	path1 := filepath.Join(dir, "a.txt")
 	path2 := filepath.Join(dir, "b.txt")
 	os.WriteFile(path1, []byte("x"), 0644)

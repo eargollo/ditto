@@ -1,51 +1,47 @@
 package db
 
 import (
-	"database/sql"
+	"context"
 	"os"
-	"strings"
 	"testing"
 )
 
-// DefaultTestDatabaseURL is the default PostgreSQL URL for tests when DATABASE_URL is unset.
-// Matches docker-compose.dev.yml (postgres service: ditto/ditto@localhost:5432/ditto).
+// DefaultTestDatabaseURL is the default PostgreSQL URL for tests.
+// Uses the ditto_test database so tests and development (make run, which uses ditto) stay separate.
+// Matches docker-compose.dev.yml (postgres service with ditto + ditto_test).
 // Credentials are for local/dev test DB only, not production.
 //
 // #nosec G101 -- test default for local Postgres (docker-compose.dev.yml), not a production secret
-const DefaultTestDatabaseURL = "postgres://ditto:ditto@localhost:5432/ditto?sslmode=disable"
+const DefaultTestDatabaseURL = "postgres://ditto:ditto@localhost:5432/ditto_test?sslmode=disable"
 
-// TestPostgresDB opens a PostgreSQL connection from DATABASE_URL (or DefaultTestDatabaseURL if unset), runs MigratePostgres, and truncates tables so each test gets a clean state.
-// With docker compose -f docker-compose.dev.yml up -d, tests work without setting DATABASE_URL. Run tests with -p 1 to avoid cross-package truncate deadlocks.
-func TestPostgresDB(t *testing.T) *sql.DB {
-	t.Helper()
-	url := os.Getenv("DATABASE_URL")
-	if url == "" {
-		url = DefaultTestDatabaseURL
+// TestDatabaseURL returns the DB URL for tests: DITTO_TEST_DATABASE_URL if set, else DefaultTestDatabaseURL.
+// Tests never use DATABASE_URL so that go test ./... defaults to the test DB even when DATABASE_URL points at dev.
+func TestDatabaseURL() string {
+	if url := os.Getenv("DITTO_TEST_DATABASE_URL"); url != "" {
+		return url
 	}
-	db, err := OpenPostgres(url)
+	return DefaultTestDatabaseURL
+}
+
+// TestPostgresDB opens PostgreSQL (TestDatabaseURL), runs MigratePostgres, starts a transaction, and returns
+// a Database (backed by that tx). Cleanup rolls back the tx and closes the connection, so each test is
+// isolated and tests can run in parallel. Use for unit tests (db, hash, server, scan packages).
+// For integration tests use a real *sql.DB and truncate (e.g. internal/integration testDB).
+func TestPostgresDB(t *testing.T) Database {
+	t.Helper()
+	url := TestDatabaseURL()
+	conn, err := OpenPostgres(url)
 	if err != nil {
 		t.Fatalf("open postgres: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := MigratePostgres(db); err != nil {
+	t.Cleanup(func() { _ = conn.Close() })
+	if err := MigratePostgres(conn); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	truncateAll := func() {
-		for _, table := range []string{"file_scan", "files", "scans", "folders"} {
-			_, _ = db.Exec("TRUNCATE TABLE " + table + " RESTART IDENTITY CASCADE")
-		}
+	tx, err := conn.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
 	}
-	// Clean state so tests see predictable data. Run tests with -p 1 to avoid cross-package truncate deadlocks.
-	for _, table := range []string{"file_scan", "files", "scans", "folders"} {
-		if _, err := db.Exec("TRUNCATE TABLE " + table + " RESTART IDENTITY CASCADE"); err != nil {
-			msg := err.Error()
-			if strings.Contains(msg, "deadlock") || strings.Contains(msg, "40P01") {
-				msg = msg + " — run go test -p 1 ./... or make test to avoid cross-package deadlocks"
-			}
-			t.Fatalf("truncate %s: %s", table, msg)
-		}
-	}
-	// Clean up after test so the database does not retain test data (e.g. scan records).
-	t.Cleanup(truncateAll)
-	return db
+	t.Cleanup(func() { _ = tx.Rollback() })
+	return &txDB{tx}
 }
