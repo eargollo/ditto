@@ -5,20 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/eargollo/ditto/internal/db"
 )
 
-// scanTestDBMu serializes tests that use RunScan (pipeline uses the tx from multiple goroutines; parallel tests can hit "driver: bad connection").
-var scanTestDBMu sync.Mutex
-
 func runTestDB(t *testing.T) db.Querier {
 	t.Helper()
-	scanTestDBMu.Lock()
-	t.Cleanup(func() { scanTestDBMu.Unlock() })
 	return db.TestPostgresDB(t)
 }
 
