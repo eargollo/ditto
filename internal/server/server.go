@@ -703,7 +703,9 @@ func (s *Server) Run(ctx context.Context) error {
 		return srv.Serve(listener)
 	}
 
-	srv.Addr = ":" + strconv.Itoa(port)
+	addr := "0.0.0.0:" + strconv.Itoa(port)
+	srv.Addr = addr
+	log.Printf("Listening on http://%s", addr)
 	err := srv.ListenAndServe()
 	if err == http.ErrServerClosed {
 		return nil
