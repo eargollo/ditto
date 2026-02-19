@@ -44,21 +44,26 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	log.Printf("config loaded: data_dir=%s port=%d", cfg.DataDir(), cfg.Port())
 
 	dataDir := cfg.DataDir()
 	if err := os.MkdirAll(dataDir, 0750); err != nil {
 		log.Fatalf("create data dir %q: %v", dataDir, err)
 	}
 
+	log.Printf("connecting to database")
 	database, err := db.OpenPostgres(cfg.DatabaseURL())
 	if err != nil {
 		log.Fatalf("open database: %v", err)
 	}
 	defer database.Close()
+	log.Printf("database connected")
 
 	if err := db.MigratePostgres(database); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
+	log.Printf("migrations done")
+
 	if err := db.BackfillFilesDeletedAt(context.Background(), database); err != nil {
 		log.Printf("backfill deleted_at: %v", err)
 	}
@@ -68,7 +73,7 @@ func main() {
 		return
 	}
 
-	// Single DB; Postgres handles concurrent readers and writers.
+	log.Printf("starting HTTP server")
 	srv, err := server.NewServer(cfg, database)
 	if err != nil {
 		log.Fatalf("server: %v", err)
