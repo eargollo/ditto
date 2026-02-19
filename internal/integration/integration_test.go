@@ -34,9 +34,7 @@ func testDB(t *testing.T) *sql.DB {
 		t.Fatalf("open postgres: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	if err := db.MigratePostgres(conn); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	// Schema must exist (run "ditto migrate" with DITTO_TEST_DATABASE_URL before integration tests).
 	if err := truncateTables(conn); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}

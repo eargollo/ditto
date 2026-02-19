@@ -1,14 +1,13 @@
-# Unit tests (packages without the integration build tag). Uses tx+rollback so tests can run in parallel. Start Postgres: docker compose -f docker-compose.dev.yml up -d
+# Unit tests (schema must exist: run "DITTO_TEST_DATABASE_URL=... go run ./cmd/ditto migrate" once, or CI runs migrate first). Each test uses its own tx+rollback so packages can run in parallel. Start Postgres: docker compose -f docker-compose.dev.yml up -d
 .PHONY: test
 test:
 	go test ./... -count=1
 
-# Integration tests only (require -tags=integration; real DB, -p 1 -parallel 1 to avoid contention). Start Postgres first.
+# Integration tests (-p 1 -parallel 1). Schema must exist; start Postgres first.
 .PHONY: integration
 integration:
 	go test -tags=integration -p 1 -parallel 1 -count=1 ./internal/integration
 
-# CI: run unit tests then integration tests (both need Postgres for DB tests).
 .PHONY: test-ci
 test-ci: test integration
 

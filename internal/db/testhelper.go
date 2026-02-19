@@ -23,9 +23,9 @@ func TestDatabaseURL() string {
 	return DefaultTestDatabaseURL
 }
 
-// TestPostgresDB opens PostgreSQL (TestDatabaseURL), runs MigratePostgres, starts a transaction, and returns
-// a Database (backed by that tx). Cleanup rolls back the tx and closes the connection, so each test is
-// isolated and tests can run in parallel. Use for unit tests (db, hash, server, scan packages).
+// TestPostgresDB opens PostgreSQL (TestDatabaseURL), starts a transaction, and returns a Database (backed by that tx).
+// Schema must already exist (run "ditto migrate" with DITTO_TEST_DATABASE_URL before tests). Cleanup rolls back the tx
+// and closes the connection, so each test is isolated and tests can run in parallel.
 // For integration tests use a real *sql.DB and truncate (e.g. internal/integration testDB).
 func TestPostgresDB(t *testing.T) Database {
 	t.Helper()
@@ -35,9 +35,6 @@ func TestPostgresDB(t *testing.T) Database {
 		t.Fatalf("open postgres: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	if err := MigratePostgres(conn); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	tx, err := conn.BeginTx(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("begin tx: %v", err)
