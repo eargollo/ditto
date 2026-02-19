@@ -59,8 +59,17 @@ jobs:
           DITTO_TEST_DATABASE_URL: postgres://ditto:ditto@localhost:5432/ditto?sslmode=disable
         run: go test -tags=integration -p 1 -parallel 1 -count=1 ./internal/integration
 
+      - name: Set version
+        id: version
+        run: |
+          if [ -n "${{ github.ref_name }}" ] && [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" >> $GITHUB_OUTPUT
+          fi
       - name: Build
-        run: go build -v -o /dev/null ./cmd/ditto
+        run: |
+          go build -v -ldflags "-X github.com/eargollo/ditto/internal/version.Version=${{ steps.version.outputs.version }}" -o /dev/null ./cmd/ditto
 
   docker:
     name: Docker build

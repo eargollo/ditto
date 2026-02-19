@@ -18,6 +18,7 @@ import (
 	"github.com/eargollo/ditto/internal/hash"
 	"github.com/eargollo/ditto/internal/server"
 	"github.com/eargollo/ditto/internal/scan"
+	"github.com/eargollo/ditto/internal/version"
 )
 
 func main() {
@@ -32,6 +33,12 @@ func main() {
 		runMigrate()
 		return
 	}
+
+	ver := version.Version
+	if ver == "" {
+		ver = "dev"
+	}
+	log.Printf("Ditto starting version=%s", ver)
 
 	cfg, err := config.Load()
 	if err != nil {
