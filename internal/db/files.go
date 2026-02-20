@@ -137,10 +137,11 @@ func InsertFileScanBatch(ctx context.Context, q Querier, fileIDs []int64, scanID
 
 // UpdateFilesDeletedAtNotInScan marks files in the folder that are not in this scan as deleted (sets deleted_at to now if not already set).
 // Call after a scan completes. Use with UpdateFilesDeletedAtInScan for the full update.
+// Uses NOT EXISTS so the planner can use an anti-join with index on file_scan(scan_id, file_id) instead of materializing a large NOT IN list.
 func UpdateFilesDeletedAtNotInScan(ctx context.Context, q Querier, scanID, folderID int64) error {
 	_, err := q.ExecContext(ctx,
 		`UPDATE files SET deleted_at = COALESCE(deleted_at, (NOW() AT TIME ZONE 'UTC'))
-		 WHERE folder_id = $2 AND id NOT IN (SELECT file_id FROM file_scan WHERE scan_id = $1)`,
+		 WHERE folder_id = $2 AND NOT EXISTS (SELECT 1 FROM file_scan WHERE file_scan.scan_id = $1 AND file_scan.file_id = files.id)`,
 		scanID, folderID)
 	return err
 }
