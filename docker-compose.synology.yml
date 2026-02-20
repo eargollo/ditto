@@ -4,8 +4,7 @@
 # - Postgres healthcheck so Ditto only starts when the DB is ready (avoids migrate hang on cold start).
 # - depends_on with condition: service_healthy so Ditto waits for Postgres.
 #
-# If you override entrypoint to /app/ditto, ensure /data on the host is writable by PUID:PGID
-# (e.g. chown 1026:100 /volume1/docker/ditto/data). The default entrypoint would chown /data for you.
+# If you override entrypoint to /app/ditto, ensure any mounted scan paths are readable by PUID:PGID.
 
 services:
   ditto:
@@ -19,13 +18,11 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      - DITTO_DATA_DIR=/data
       - DITTO_PORT=8180
       - DATABASE_URL=postgres://ditto:ditto@postgres:5432/ditto?sslmode=disable
       - PUID=1026
       - PGID=100
     volumes:
-      - /volume1/docker/ditto/data:/data
       - /volume1/video:/volume1/video:ro
       - /volume1/Videos:/volume1/Videos:ro
       - /volume1/HomeData:/volume1/HomeData:ro

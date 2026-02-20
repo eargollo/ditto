@@ -68,7 +68,7 @@ GOOS=darwin GOARCH=arm64 go build -ldflags="-w -s" -o dist/ditto-darwin-arm64 ./
 Run with:
 
 ```bash
-DITTO_DATA_DIR=./data DITTO_PORT=8080 ./dist/ditto-linux-amd64
+DATABASE_URL=postgres://... DITTO_PORT=8080 ./dist/ditto-linux-amd64
 ```
 
 ## Publish checklist
