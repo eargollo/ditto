@@ -52,14 +52,22 @@ func NewServer(cfg *config.Config, database db.Database) (*Server, error) {
 	fm := template.FuncMap{
 		"formatBytes":        formatBytes,
 		"formatBytesWithRaw": formatBytesWithRaw,
+		"previewURL":         previewURL,
+		"isPreviewable":      isPreviewable,
+		"hasImageExt":        hasImageExt,
+		"hasVideoExt":        hasVideoExt,
+		"baseName":           filepath.Base,
 	}
+	log.Printf("server: parsing templates")
 	tmpl, err := template.New("").Funcs(fm).ParseFS(fs.FS(templateFS), "templates/*.html")
 	if err != nil {
+		log.Printf("server: parse templates failed: %v", err)
 		return nil, err
 	}
 	s := &Server{cfg: cfg, db: database, mux: http.NewServeMux(), tmpl: tmpl, scanQueue: make(chan int64, scanQueueCap)}
 	s.listenCond = sync.NewCond(&s.mu)
 	s.routes()
+	log.Printf("server: routes registered")
 	return s, nil
 }
 
@@ -121,12 +129,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /scans/start", s.handleScansStart())
 	s.mux.HandleFunc("POST /scans/{id}/continue", s.handleScanContinue())
 	s.mux.HandleFunc("GET /scans/{id}/status", s.handleScanStatus())
-	s.mux.HandleFunc("GET /duplicates/hash/{hash}", s.handleDuplicateHashGroupByHash())
-	s.mux.HandleFunc("GET /scans/{id}/duplicates/hash/{hash}", s.handleDuplicateHashGroup())
-	s.mux.HandleFunc("GET /scans/{id}/duplicates/inode", s.handleDuplicateInodeGroup())
 	s.mux.HandleFunc("GET /scans/{id}/duplicates", s.handleDuplicates())
 	s.mux.HandleFunc("GET /scans/{id}/export", s.handleScanExport())
 	s.mux.HandleFunc("GET /scans/{id}", s.handleScanProgress())
+	s.mux.HandleFunc("GET /preview", s.handlePreview())
 	s.mux.HandleFunc("GET /api/fragment", s.handleFragment())
 	s.mux.HandleFunc("GET /health", s.handleHealth())
 
@@ -214,24 +220,6 @@ type shellData struct {
 func (s *Server) handleHome() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.renderPage(w, "layout.html", "shell-content", &shellData{})
-	}
-}
-
-// handleDuplicateHashGroupByHash serves GET /duplicates/hash/{hash} using precomputed view (files by hash, deleted_at IS NULL).
-func (s *Server) handleDuplicateHashGroupByHash() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		hash := r.PathValue("hash")
-		if hash == "" {
-			http.Error(w, "hash required", http.StatusBadRequest)
-			return
-		}
-		files, err := db.FilesInHashGroupByHash(r.Context(), s.dbForRead(), hash, 0)
-		if err != nil {
-			log.Printf("error: files in hash group hash=%s: %v", hash, err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		s.renderPage(w, "layout.html", "duplicate-group-content", hashGroupData{ScanID: 0, Hash: hash, Files: files})
 	}
 }
 
@@ -453,20 +441,6 @@ type duplicatesPageData struct {
 	ByInode []db.DuplicateGroupByInode
 }
 
-type hashGroupData struct {
-	ScanID           int64
-	Hash             string
-	Files            []db.File
-	RootPathByScanID map[int64]string // when ScanID is 0 (All), root path per scan for display
-}
-
-type inodeGroupData struct {
-	ScanID   int64
-	Inode    int64
-	DeviceID *int64
-	Files    []db.File
-}
-
 func (s *Server) handleDuplicates() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scanID, err := parseScanID(r.PathValue("id"))
@@ -482,93 +456,6 @@ func (s *Server) handleDuplicates() http.HandlerFunc {
 		byHash, _ := db.DuplicateGroupsByHash(r.Context(), s.dbForRead(), scanID)
 		byInode, _ := db.DuplicateGroupsByInode(r.Context(), s.dbForRead(), scanID)
 		s.renderPage(w, "layout.html", "duplicates-content", duplicatesPageData{ScanID: scanID, ByHash: byHash, ByInode: byInode})
-	}
-}
-
-func (s *Server) handleDuplicateHashGroup() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		scanID, err := parseScanID(r.PathValue("id"))
-		if err != nil {
-			log.Printf("error: duplicate hash group parse scan id %q: %v", r.PathValue("id"), err)
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		hash := r.PathValue("hash")
-		if hash == "" {
-			http.Error(w, "hash required", http.StatusBadRequest)
-			return
-		}
-		ctx := r.Context()
-		database := s.dbForRead()
-		if scanID == 0 {
-			// "All (latest per folder)": use latest scan per root
-			scans, _ := db.ListScansRecent(ctx, database, homeListScansLimit)
-			seen := make(map[string]bool)
-			var scanIDs []int64
-			for _, sc := range scans {
-				if seen[sc.RootPath] {
-					continue
-				}
-				seen[sc.RootPath] = true
-				scanIDs = append(scanIDs, sc.ID)
-			}
-			files, _ := db.FilesInHashGroupAcrossScans(ctx, database, scanIDs, hash)
-			rootByScan := make(map[int64]string)
-			for _, sc := range scans {
-				if _, ok := rootByScan[sc.ID]; !ok {
-					rootByScan[sc.ID] = sc.RootPath
-				}
-			}
-			s.renderPage(w, "layout.html", "duplicate-group-content", hashGroupData{ScanID: 0, Hash: hash, Files: files, RootPathByScanID: rootByScan})
-			return
-		}
-		if _, err := db.GetScan(ctx, database, scanID); err != nil {
-			http.Error(w, "scan not found", http.StatusNotFound)
-			return
-		}
-		files, err := db.FilesInHashGroup(r.Context(), database, scanID, hash)
-		if err != nil {
-			log.Printf("error: files in hash group scan=%d hash=%s: %v", scanID, hash, err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		s.renderPage(w, "layout.html", "duplicate-group-content", hashGroupData{ScanID: scanID, Hash: hash, Files: files})
-	}
-}
-
-func (s *Server) handleDuplicateInodeGroup() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		scanID, err := parseScanID(r.PathValue("id"))
-		if err != nil {
-			log.Printf("error: duplicate inode group parse scan id %q: %v", r.PathValue("id"), err)
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		inode, err := strconv.ParseInt(r.URL.Query().Get("inode"), 10, 64)
-		if err != nil {
-			http.Error(w, "inode required", http.StatusBadRequest)
-			return
-		}
-		var deviceID *int64
-		if d := r.URL.Query().Get("device_id"); d != "" {
-			v, err := strconv.ParseInt(d, 10, 64)
-			if err != nil {
-				http.Error(w, "invalid device_id", http.StatusBadRequest)
-				return
-			}
-			deviceID = &v
-		}
-		if _, err := db.GetScan(r.Context(), s.dbForRead(), scanID); err != nil {
-			http.Error(w, "scan not found", http.StatusNotFound)
-			return
-		}
-		files, err := db.FilesInInodeGroup(r.Context(), s.dbForRead(), scanID, inode, deviceID)
-		if err != nil {
-			log.Printf("error: files in inode group scan=%d: %v", scanID, err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		s.renderPage(w, "layout.html", "duplicate-inode-group-content", inodeGroupData{ScanID: scanID, Inode: inode, DeviceID: deviceID, Files: files})
 	}
 }
 
@@ -690,8 +577,10 @@ func (s *Server) Run(ctx context.Context) error {
 		s.listenReady = make(chan struct{})
 		s.listenCond.Broadcast()
 		s.mu.Unlock()
+		log.Printf("server: binding to ephemeral port")
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
+			log.Printf("server: listen (port 0) failed: %v", err)
 			return err
 		}
 		addr := listener.Addr().(*net.TCPAddr)
@@ -705,11 +594,13 @@ func (s *Server) Run(ctx context.Context) error {
 
 	addr := "0.0.0.0:" + strconv.Itoa(port)
 	srv.Addr = addr
-	log.Printf("Listening on http://%s", addr)
+	log.Printf("server: listening on http://%s", addr)
 	err := srv.ListenAndServe()
 	if err == http.ErrServerClosed {
+		log.Printf("server: shutdown complete")
 		return nil
 	}
+	log.Printf("server: ListenAndServe failed: %v", err)
 	return err
 }
 

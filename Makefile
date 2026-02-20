@@ -1,7 +1,12 @@
-# Unit tests (schema must exist: run "DITTO_TEST_DATABASE_URL=... go run ./cmd/ditto migrate" once, or CI runs migrate first). Each test gets a tx wrapped in serializingDB so the pipeline can use it from multiple goroutines safely. Start Postgres: docker compose -f docker-compose.dev.yml up -d
+# Unit tests (schema must exist: run make test-migrate once, or CI runs migrate first). Start Postgres: docker compose -f docker-compose.dev.yml up -d
 .PHONY: test
 test:
 	go test ./... -count=1
+
+# Create/update schema on the test database (ditto_test). Run once before make test or make integration. Requires Postgres: docker compose -f docker-compose.dev.yml up -d
+.PHONY: test-migrate
+test-migrate:
+	DITTO_TEST_DATABASE_URL=postgres://ditto:ditto@localhost:5432/ditto_test?sslmode=disable go run ./cmd/ditto migrate
 
 # Integration tests (-p 1 -parallel 1). Schema must exist; start Postgres first.
 .PHONY: integration
@@ -48,3 +53,8 @@ govulncheck:
 # Run all static and security checks (gosec + govulncheck).
 .PHONY: lint
 lint: gosec govulncheck
+
+# Build Tailwind CSS (Option A: clean dashboard). Run before build/run to pick up UI changes.
+.PHONY: css
+css:
+	npx tailwindcss -i ./internal/server/static/input.css -o ./internal/server/static/app.css

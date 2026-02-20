@@ -53,14 +53,28 @@ func RunScan(ctx context.Context, q db.Querier, rootPath string, opts *ScanOptio
 	if err := db.UpdateScanCompletedAt(ctx, q, scanID, fileCount, skippedScan); err != nil {
 		return 0, err
 	}
-	start := time.Now()
-	if err := db.UpdateFilesDeletedAtForScan(ctx, q, scanID, folderID); err != nil {
-		log.Printf("[scan] deleted_at update failed for scan %d: %v", scanID, err)
-	} else {
-		d := time.Since(start).Milliseconds()
-		_ = db.UpdateScanDeletedAtUpdateDuration(ctx, q, scanID, d)
-		log.Printf("[scan] deleted_at update for scan %d took %d ms", scanID, d)
+	deletedAtStart := time.Now()
+	log.Printf("[scan] starting deleted_at update for scan %d (folder %d, %d files)", scanID, folderID, fileCount)
+
+	log.Printf("[scan] starting deleted_at update (not in scan) for scan %d", scanID)
+	t1 := time.Now()
+	if err := db.UpdateFilesDeletedAtNotInScan(ctx, q, scanID, folderID); err != nil {
+		log.Printf("[scan] deleted_at update (not in scan) failed for scan %d: %v", scanID, err)
+		return 0, err
 	}
+	log.Printf("[scan] deleted_at update (not in scan) for scan %d took %d ms", scanID, time.Since(t1).Milliseconds())
+
+	log.Printf("[scan] starting deleted_at update (in scan) for scan %d", scanID)
+	t2 := time.Now()
+	if err := db.UpdateFilesDeletedAtInScan(ctx, q, scanID); err != nil {
+		log.Printf("[scan] deleted_at update (in scan) failed for scan %d: %v", scanID, err)
+		return 0, err
+	}
+	log.Printf("[scan] deleted_at update (in scan) for scan %d took %d ms", scanID, time.Since(t2).Milliseconds())
+
+	d := time.Since(deletedAtStart).Milliseconds()
+	_ = db.UpdateScanDeletedAtUpdateDuration(ctx, q, scanID, d)
+	log.Printf("[scan] deleted_at update for scan %d took %d ms total", scanID, d)
 	return scanID, nil
 }
 
@@ -88,13 +102,27 @@ func RunScanForExisting(ctx context.Context, q db.Querier, scanID int64, folderI
 	if err := db.UpdateScanCompletedAt(ctx, q, scanID, fileCount, skippedScan); err != nil {
 		return err
 	}
-	start := time.Now()
-	if err := db.UpdateFilesDeletedAtForScan(ctx, q, scanID, folderID); err != nil {
-		log.Printf("[scan] deleted_at update failed for scan %d: %v", scanID, err)
-	} else {
-		d := time.Since(start).Milliseconds()
-		_ = db.UpdateScanDeletedAtUpdateDuration(ctx, q, scanID, d)
-		log.Printf("[scan] deleted_at update for scan %d took %d ms", scanID, d)
+	deletedAtStart := time.Now()
+	log.Printf("[scan] starting deleted_at update for scan %d (folder %d, %d files)", scanID, folderID, fileCount)
+
+	log.Printf("[scan] starting deleted_at update (not in scan) for scan %d", scanID)
+	t1 := time.Now()
+	if err := db.UpdateFilesDeletedAtNotInScan(ctx, q, scanID, folderID); err != nil {
+		log.Printf("[scan] deleted_at update (not in scan) failed for scan %d: %v", scanID, err)
+		return err
 	}
+	log.Printf("[scan] deleted_at update (not in scan) for scan %d took %d ms", scanID, time.Since(t1).Milliseconds())
+
+	log.Printf("[scan] starting deleted_at update (in scan) for scan %d", scanID)
+	t2 := time.Now()
+	if err := db.UpdateFilesDeletedAtInScan(ctx, q, scanID); err != nil {
+		log.Printf("[scan] deleted_at update (in scan) failed for scan %d: %v", scanID, err)
+		return err
+	}
+	log.Printf("[scan] deleted_at update (in scan) for scan %d took %d ms", scanID, time.Since(t2).Milliseconds())
+
+	d := time.Since(deletedAtStart).Milliseconds()
+	_ = db.UpdateScanDeletedAtUpdateDuration(ctx, q, scanID, d)
+	log.Printf("[scan] deleted_at update for scan %d took %d ms total", scanID, d)
 	return nil
 }

@@ -10,11 +10,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -28,10 +26,7 @@ func testDB(t *testing.T) *sql.DB {
 	url := databaseURL(t)
 	conn, err := db.OpenPostgres(url)
 	if err != nil {
-		if isConnectionRefused(err) {
-			t.Skip("Postgres not available (start with e.g. docker compose -f docker-compose.dev.yml up -d)")
-		}
-		t.Fatalf("open postgres: %v", err)
+		t.Fatalf("open postgres: %v (integration tests require Postgres; start with: docker compose -f docker-compose.dev.yml up -d; then run migrate with DITTO_TEST_DATABASE_URL set)", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	// Schema must exist (run "ditto migrate" with DITTO_TEST_DATABASE_URL before integration tests).
@@ -40,16 +35,6 @@ func testDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { _ = truncateTables(conn) })
 	return conn
-}
-
-func isConnectionRefused(err error) bool {
-	if err == nil {
-		return false
-	}
-	if oe, ok := err.(*net.OpError); ok && oe.Op == "dial" {
-		return true
-	}
-	return strings.Contains(err.Error(), "connection refused")
 }
 
 func truncateTables(database *sql.DB) error {
