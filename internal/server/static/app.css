@@ -5,8 +5,9 @@ a:hover { text-decoration: underline; }
 .shadow { box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
 .bg-white { background: #fff; }
 
-/* Top nav: purple bar, version on the right */
-.nav-bar { background: #5b21b6; box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+/* Top nav: production = slate; dev = purple (version empty or "dev") */
+.nav-bar { background: #1e293b; box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+.nav-bar.nav-bar--dev { background: #5b21b6; }
 .nav-link { color: rgba(255,255,255,0.9); text-decoration: none; }
 .nav-link:hover { color: #fff; text-decoration: underline; }
 .nav-link-brand { font-size: 1.125rem; font-weight: 600; }

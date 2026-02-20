@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"log"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -27,6 +28,11 @@ func OpenPostgres(url string) (*sql.DB, error) {
 // MigratePostgres creates the folders, files, scans, and file_scan tables and indexes if they do not exist.
 // Idempotent; safe to call on every startup.
 func MigratePostgres(db *sql.DB) error {
+	log.Printf("running database migrations")
+	// Avoid hanging forever if another process holds a schema lock (e.g. another instance migrating).
+	if _, err := db.Exec("SET lock_timeout = '60s'"); err != nil {
+		return err
+	}
 	// Use timestamptz for all timestamps; store in UTC.
 	ddl := []string{
 		`CREATE TABLE IF NOT EXISTS folders (

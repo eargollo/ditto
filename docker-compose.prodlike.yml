@@ -1,0 +1,54 @@
+# Test production-like setup locally: build the Docker image and run it with Postgres.
+# Use this to reproduce startup issues (migrations, connection reset) without deploying.
+#
+# Usage:
+#   docker compose -f docker-compose.prodlike.yml up --build
+#
+# Then open http://localhost:8180 and watch logs in the terminal.
+# To rebuild after code changes: docker compose -f docker-compose.prodlike.yml up --build
+#
+# Optional: pass version for the built binary (shows in UI):
+#   docker compose -f docker-compose.prodlike.yml build --build-arg VERSION=v0.6.1
+#   docker compose -f docker-compose.prodlike.yml up -d
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: ditto-postgres-prodlike
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ditto
+      POSTGRES_PASSWORD: ditto
+      POSTGRES_DB: ditto
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ditto-postgres-prodlike:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ditto -d ditto"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  ditto:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+    image: ditto:local
+    container_name: ditto-prodlike
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DITTO_PORT: 8180
+      DATABASE_URL: postgres://ditto:ditto@postgres:5432/ditto?sslmode=disable
+    volumes:
+      - ditto-data-prodlike:/data
+    ports:
+      - "8180:8180"
+
+volumes:
+  ditto-postgres-prodlike:
+  ditto-data-prodlike:
