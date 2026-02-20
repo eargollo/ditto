@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 )
@@ -171,25 +170,6 @@ func UpdateFilesDeletedAtForScan(ctx context.Context, q Querier, scanID, folderI
 		return err
 	}
 	return UpdateFilesDeletedAtInScan(ctx, q, scanID)
-}
-
-// BackfillFilesDeletedAt sets deleted_at for all files based on the latest completed scan per folder.
-// Call once after adding the deleted_at column (e.g. on startup). Idempotent.
-func BackfillFilesDeletedAt(ctx context.Context, q Querier) error {
-	log.Printf("db: backfill deleted_at: listing folders")
-	folders, err := ListFolders(ctx, q)
-	if err != nil {
-		log.Printf("db: backfill deleted_at ListFolders failed: %v", err)
-		return err
-	}
-	for _, folder := range folders {
-		scanID, err := GetLatestCompletedScanIDForFolder(ctx, q, folder.ID)
-		if err != nil || scanID == 0 {
-			continue
-		}
-		_ = UpdateFilesDeletedAtForScan(ctx, q, scanID, folder.ID)
-	}
-	return nil
 }
 
 // GetFilesByScanID returns all files that appear in the given scan (with full path: folder path || '/' || file path). ScanID is set on each file.

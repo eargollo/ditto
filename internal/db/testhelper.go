@@ -24,7 +24,7 @@ func TestDatabaseURL() string {
 }
 
 // TestPostgresDB opens PostgreSQL (TestDatabaseURL), starts a transaction, and returns a Database (backed by that tx).
-// Schema must already exist (run "ditto migrate" with DITTO_TEST_DATABASE_URL before tests). Cleanup rolls back the tx
+// Schema must already exist (run "make migrate" before tests). Cleanup rolls back the tx
 // and closes the connection, so each test is isolated and tests can run in parallel.
 // For integration tests use a real *sql.DB and truncate (e.g. internal/integration testDB).
 func TestPostgresDB(t *testing.T) Database {
@@ -32,7 +32,7 @@ func TestPostgresDB(t *testing.T) Database {
 	url := TestDatabaseURL()
 	conn, err := OpenPostgres(url)
 	if err != nil {
-		t.Fatalf("open postgres: %v (tests require Postgres; start with: docker compose -f docker-compose.dev.yml up -d; then: DITTO_TEST_DATABASE_URL=%s go run ./cmd/ditto migrate)", err, url)
+		t.Fatalf("open postgres: %v (tests require Postgres; start with: docker compose -f docker-compose.dev.yml up -d; then: make migrate). url: %s", err, url)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	tx, err := conn.BeginTx(context.Background(), nil)

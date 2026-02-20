@@ -1,12 +1,37 @@
-# Unit tests (schema must exist: run make test-migrate once, or CI runs migrate first). Start Postgres: docker compose -f docker-compose.dev.yml up -d
+# Test DB URL for migrate targets (dev/test only). Override with MIGRATE_DATABASE_URL for a different DB.
+# Production: app runs migrations on startup; do not use these targets in production.
+MIGRATE_DATABASE_URL ?= postgres://ditto:ditto@localhost:5432/ditto_test?sslmode=disable
+# Use migrate CLI from PATH (faster). One-time install: make install-migrate
+MIGRATE_CLI ?= migrate
+MIGRATE_PATH := -path ./internal/db/migrations -database "$(MIGRATE_DATABASE_URL)"
+
+# Install migrate CLI into GOPATH/bin (one-time, for make migrate / migrate-up / migrate-down). Matches go.mod version.
+.PHONY: install-migrate
+install-migrate:
+	go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
+
+# Run all pending migrations (up). Dev/test only; run before make test or make integration. Requires Postgres: docker compose -f docker-compose.dev.yml up -d
+.PHONY: migrate
+migrate:
+	$(MIGRATE_CLI) $(MIGRATE_PATH) up
+
+# Alias for migrate: run all migrations up.
+.PHONY: migrate-up
+migrate-up: migrate
+
+# Run migrations down. Default one step; use STEPS=N for N steps (e.g. make migrate-down STEPS=2). Dev/test only.
+.PHONY: migrate-down
+migrate-down:
+	$(MIGRATE_CLI) $(MIGRATE_PATH) down $(or $(STEPS),1)
+
+# Unit tests (schema must exist: run make migrate once, or CI runs migrate first). Uses test DB (DITTO_TEST_DATABASE_URL). Start Postgres: docker compose -f docker-compose.dev.yml up -d
 .PHONY: test
 test:
 	go test ./... -count=1
 
-# Create/update schema on the test database (ditto_test). Run once before make test or make integration. Requires Postgres: docker compose -f docker-compose.dev.yml up -d
+# Create/update schema on the test database (ditto_test). Run once before make test or make integration. Same as make migrate. Requires Postgres: docker compose -f docker-compose.dev.yml up -d
 .PHONY: test-migrate
-test-migrate:
-	DITTO_TEST_DATABASE_URL=postgres://ditto:ditto@localhost:5432/ditto_test?sslmode=disable go run ./cmd/ditto migrate
+test-migrate: migrate
 
 # Integration tests (-p 1 -parallel 1). Schema must exist; start Postgres first.
 .PHONY: integration
@@ -49,6 +74,11 @@ gosec:
 .PHONY: govulncheck
 govulncheck:
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+# Find unused code (functions, methods, types, constants). Uses staticcheck U1000.
+.PHONY: unused
+unused:
+	go run honnef.co/go/tools/cmd/staticcheck@latest -checks=U1000 ./...
 
 # Run all static and security checks (gosec + govulncheck).
 .PHONY: lint

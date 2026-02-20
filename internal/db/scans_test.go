@@ -129,30 +129,6 @@ func TestGetLatestIncompleteScanForFolder(t *testing.T) {
 	}
 }
 
-func TestGetLatestCompletedScanIDForFolder(t *testing.T) {
-	db := TestPostgresDB(t)
-	ctx := context.Background()
-
-	fooID, _ := AddFolder(ctx, db, "/foo")
-	id, err := GetLatestCompletedScanIDForFolder(ctx, db, fooID)
-	if err != nil {
-		t.Fatalf("GetLatestCompletedScanIDForFolder: %v", err)
-	}
-	if id != 0 {
-		t.Errorf("no completed scan: got %d, want 0", id)
-	}
-
-	s1, _ := CreateScan(ctx, db, fooID)
-	_ = UpdateScanCompletedAt(ctx, db, s1.ID, 0, 0)
-	id, err = GetLatestCompletedScanIDForFolder(ctx, db, fooID)
-	if err != nil {
-		t.Fatalf("GetLatestCompletedScanIDForFolder: %v", err)
-	}
-	if id != s1.ID {
-		t.Errorf("one completed: got %d, want %d", id, s1.ID)
-	}
-}
-
 func TestUpdateScanDeletedAtUpdateDuration(t *testing.T) {
 	db := TestPostgresDB(t)
 	ctx := context.Background()

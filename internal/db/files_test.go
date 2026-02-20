@@ -166,23 +166,3 @@ func TestUpdateFilesDeletedAtForScan(t *testing.T) {
 		t.Errorf("file c (not in scan) should have deleted_at set, got nil")
 	}
 }
-
-func TestBackfillFilesDeletedAt(t *testing.T) {
-	ctx := context.Background()
-	db := TestPostgresDB(t)
-
-	folderID, _ := AddFolder(ctx, db, "/tmp")
-	scan, _ := CreateScan(ctx, db, folderID)
-	fileID, _ := UpsertFile(ctx, db, folderID, "a", 10, 0, ptrInt64(1), nil)
-	InsertFileScan(ctx, db, fileID, scan.ID)
-	_ = UpdateScanCompletedAt(ctx, db, scan.ID, 1, 0)
-
-	if err := BackfillFilesDeletedAt(ctx, db); err != nil {
-		t.Fatalf("BackfillFilesDeletedAt: %v", err)
-	}
-	var deleted interface{}
-	db.QueryRowContext(ctx, "SELECT deleted_at FROM files WHERE id = $1", fileID).Scan(&deleted)
-	if deleted != nil {
-		t.Errorf("file in latest completed scan should have deleted_at NULL after backfill, got %v", deleted)
-	}
-}

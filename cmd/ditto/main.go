@@ -29,12 +29,6 @@ func main() {
 		return
 	}
 
-	// Migrate only: open DB, run migrations, exit. Uses DITTO_TEST_DATABASE_URL if set (for tests), else DATABASE_URL via config.
-	if len(os.Args) >= 2 && os.Args[1] == "migrate" {
-		runMigrate()
-		return
-	}
-
 	ver := version.Version
 	if ver == "" {
 		ver = "dev"
@@ -66,17 +60,16 @@ func main() {
 	log.Printf("init: database connected")
 
 	log.Printf("init: running migrations")
-	if err := db.MigratePostgres(database); err != nil {
+	if _, err := database.Exec("SET lock_timeout = '300s'"); err != nil {
+		log.Printf("init: SET lock_timeout failed: %v", err)
+		log.Fatalf("init: migrate: %v", err)
+	}
+	var migrateProgress db.MigrationProgress
+	if err := db.RunMigrations(database, &migrateProgress); err != nil {
 		log.Printf("init: migrate failed: %v", err)
 		log.Fatalf("init: migrate: %v", err)
 	}
 	log.Printf("init: migrations done")
-
-	log.Printf("init: running backfill (deleted_at)")
-	if err := db.BackfillFilesDeletedAt(context.Background(), database); err != nil {
-		log.Printf("init: backfill deleted_at failed (non-fatal): %v", err)
-	}
-	log.Printf("init: backfill done")
 
 	if len(os.Args) >= 3 && os.Args[1] == "scan" {
 		runScan(context.Background(), database, os.Args[2])
@@ -208,26 +201,3 @@ func openDBWithRetry(url string, attempts int, interval time.Duration) (*sql.DB,
 	return nil, lastErr
 }
 
-func runMigrate() {
-	log.Print("migrate: starting")
-	url := os.Getenv("DITTO_TEST_DATABASE_URL")
-	if url == "" {
-		log.Print("migrate: loading config for DATABASE_URL")
-		cfg, err := config.Load()
-		if err != nil {
-			log.Fatalf("migrate: config: %v", err)
-		}
-		url = cfg.DatabaseURL()
-	}
-	log.Print("migrate: opening database")
-	conn, err := db.OpenPostgres(url)
-	if err != nil {
-		log.Fatalf("migrate: open database: %v", err)
-	}
-	defer conn.Close()
-	log.Print("migrate: running migrations")
-	if err := db.MigratePostgres(conn); err != nil {
-		log.Fatalf("migrate: run migrations: %v", err)
-	}
-	log.Print("migrate: done")
-}

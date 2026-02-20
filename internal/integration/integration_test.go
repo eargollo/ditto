@@ -26,10 +26,10 @@ func testDB(t *testing.T) *sql.DB {
 	url := databaseURL(t)
 	conn, err := db.OpenPostgres(url)
 	if err != nil {
-		t.Fatalf("open postgres: %v (integration tests require Postgres; start with: docker compose -f docker-compose.dev.yml up -d; then run migrate with DITTO_TEST_DATABASE_URL set)", err)
+		t.Fatalf("open postgres: %v (integration tests require Postgres; start with: docker compose -f docker-compose.dev.yml up -d; then make migrate)", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	// Schema must exist (run "ditto migrate" with DITTO_TEST_DATABASE_URL before integration tests).
+	// Schema must exist (run "make migrate" before integration tests).
 	if err := truncateTables(conn); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}

@@ -62,13 +62,6 @@ func (o *HashOptions) workers() int {
 	return o.Workers
 }
 
-func (o *HashOptions) maxHashesPerSecond() int {
-	if o == nil {
-		return 0
-	}
-	return o.MaxHashesPerSecond
-}
-
 // RunHashPhase runs the hash phase for the given scan: resets any orphaned 'hashing' to 'pending',
 // sets hash_started_at, then runs a producer-consumer pipeline (one query streams pending jobs to a channel,
 // N workers process them). Sets hash_completed_at when done. Respects context cancellation.
