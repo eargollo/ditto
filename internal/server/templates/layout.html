@@ -9,13 +9,13 @@
   <script src="/static/app.js" defer></script>
 </head>
 <body class="min-h-screen bg-gray-50">
-  <nav class="nav-bar">
+  <nav class="nav-bar{{if or (eq .Version "") (eq .Version "dev")}} nav-bar--dev{{end}}">
     <div class="w-full px-4 py-3 flex items-center justify-between">
       <div class="flex gap-4 items-center">
         <a href="/" class="nav-link nav-link-brand">Ditto</a>
         <a href="/scans" class="nav-link">Scans</a>
       </div>
-      <span class="nav-version">{{if .Version}}v{{.Version}}{{else}}dev{{end}}</span>
+      <span class="nav-version">{{if .Version}}{{.Version}}{{else}}dev{{end}}</span>
     </div>
   </nav>
   <main class="max-w-7xl mx-auto px-4 py-6">

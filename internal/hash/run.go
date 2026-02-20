@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,12 +14,12 @@ import (
 	"golang.org/x/time/rate"
 )
 
-const hashProgressLogInterval = 50   // log "N/M files" every this many files
-const hashProgressUpdateInterval = 2 * time.Second // write hash stats to DB for live UI progress (same as scan)
-const slowOpThreshold = 100 * time.Millisecond // log when a single DB op exceeds this (for investigation)
-const hashJobChannelCap = 1000       // bounded channel for producer-consumer; backpressure if consumers are slow
-const fileLogInterval = 5 * time.Second // at most one per-file log line every this long (avoid flooding)
-const hashBatchSize = 50              // flush hash updates to DB in batches to reduce round-trips (e.g. on NAS)
+const hashProgressLogInterval = 50                  // log "N/M files" every this many files (scaled up for large totals below)
+const hashProgressUpdateInterval = 2 * time.Second  // write hash stats to DB for live UI (scan progress page polls every 2s)
+const slowOpThreshold = 100 * time.Millisecond      // log when a single DB op exceeds this (for investigation)
+const hashJobChannelCap = 1000                     // bounded channel for producer-consumer; backpressure if consumers are slow
+const fileLogInterval = 5 * time.Second            // at most one per-file log line every this long (avoid flooding)
+const hashBatchSize = 50                            // flush hash updates to DB in batches to reduce round-trips (e.g. on NAS)
 
 func logSlowIf(op string, start time.Time) {
 	if d := time.Since(start); d > slowOpThreshold {
@@ -32,13 +33,19 @@ var (
 )
 
 // logFileIfThrottled logs the message at most once per fileLogInterval (globally across workers).
-func logFileIfThrottled(format string, args ...interface{}) {
+// workerID is -1 to omit worker from the log; otherwise logs "worker N" so you can see parallelism.
+func logFileIfThrottled(workerID int, format string, args ...interface{}) {
 	fileLogMu.Lock()
 	defer fileLogMu.Unlock()
 	if time.Since(fileLogLastTime) < fileLogInterval {
 		return
 	}
 	fileLogLastTime = time.Now()
+	if workerID >= 0 {
+		// Insert "worker N" after "[hash] " so we get "[hash] worker 2 hashing ..."
+		format = "[hash] worker %d " + strings.TrimPrefix(format, "[hash] ")
+		args = append([]interface{}{workerID}, args...)
+	}
 	log.Printf(format, args...)
 }
 
@@ -214,6 +221,7 @@ func runHashPhaseProducerConsumer(ctx context.Context, q db.Querier, scanID int6
 	}
 	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
+		workerID := i
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -221,7 +229,7 @@ func runHashPhaseProducerConsumer(ctx context.Context, q db.Querier, scanID int6
 				if ctx.Err() != nil {
 					return
 				}
-				reused, update, err := processClaimedJob(ctx, q, job, opts, now, limiter)
+				reused, update, err := processClaimedJob(ctx, q, job, opts, now, limiter, workerID)
 				if err != nil {
 					if hashErrorCount != nil {
 						hashErrorCount.Add(1)
@@ -241,7 +249,7 @@ func runHashPhaseProducerConsumer(ctx context.Context, q db.Querier, scanID int6
 				case <-ctx.Done():
 					return
 				}
-				progressLog(completed, total, phaseStart)
+				progressLog(completed, total, phaseStart, numWorkers)
 			}
 		}()
 	}
@@ -260,7 +268,8 @@ func runHashPhaseProducerConsumer(ctx context.Context, q db.Querier, scanID int6
 }
 
 // processClaimedJob hashes the file (or reuses inode/previous hash). Returns (reused, update, nil) on success; update is sent to batch writer.
-func processClaimedJob(ctx context.Context, q db.Querier, job *db.File, opts *HashOptions, now time.Time, limiter *rate.Limiter) (reused bool, update *db.HashUpdate, err error) {
+// workerID is used in throttled per-file logs so you can see which worker handled the file (0 to numWorkers-1).
+func processClaimedJob(ctx context.Context, q db.Querier, job *db.File, opts *HashOptions, now time.Time, limiter *rate.Limiter, workerID int) (reused bool, update *db.HashUpdate, err error) {
 	var h string
 	// If this file's hash was cleared (set to pending because mtime/size changed), we must re-read from disk.
 	// Otherwise we could reuse a stale hash and miss content changes (e.g. scenario 3: B same size, different content).
@@ -273,7 +282,7 @@ func processClaimedJob(ctx context.Context, q db.Querier, job *db.File, opts *Ha
 			return false, nil, err
 		}
 		if h != "" {
-			logFileIfThrottled("[hash] reused (inode) %s [%s]", job.Path, filepath.Base(job.Path))
+			logFileIfThrottled(workerID, "[hash] reused (inode) %s [%s]", job.Path, filepath.Base(job.Path))
 			return true, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now, Mtime: job.MTime}, nil
 		}
 		// Previous-scan unchanged file reuse (inode+device+size)
@@ -284,7 +293,7 @@ func processClaimedJob(ctx context.Context, q db.Querier, job *db.File, opts *Ha
 			return false, nil, err
 		}
 		if h != "" {
-			logFileIfThrottled("[hash] reused (unchanged) %s [%s]", job.Path, filepath.Base(job.Path))
+			logFileIfThrottled(workerID, "[hash] reused (unchanged) %s [%s]", job.Path, filepath.Base(job.Path))
 			return true, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now, Mtime: job.MTime}, nil
 		}
 		// When inode is nil (e.g. Windows/network), reuse by path+size from any file that already has a hash.
@@ -296,7 +305,7 @@ func processClaimedJob(ctx context.Context, q db.Querier, job *db.File, opts *Ha
 				return false, nil, err
 			}
 			if h != "" {
-				logFileIfThrottled("[hash] reused (path+size) %s [%s]", job.Path, filepath.Base(job.Path))
+				logFileIfThrottled(workerID, "[hash] reused (path+size) %s [%s]", job.Path, filepath.Base(job.Path))
 				return true, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now, Mtime: job.MTime}, nil
 			}
 		}
@@ -307,24 +316,32 @@ func processClaimedJob(ctx context.Context, q db.Querier, job *db.File, opts *Ha
 			return false, nil, err
 		}
 	}
-	logFileIfThrottled("[hash] hashing %s [%s] (%d bytes)", job.Path, filepath.Base(job.Path), job.Size)
+	logFileIfThrottled(workerID, "[hash] hashing %s [%s] (%d bytes)", job.Path, filepath.Base(job.Path), job.Size)
 	h, err = HashFile(job.Path)
 	if err != nil {
-		logFileIfThrottled("[hash] failed %s [%s]: %v", job.Path, filepath.Base(job.Path), err)
+		logFileIfThrottled(workerID, "[hash] failed %s [%s]: %v", job.Path, filepath.Base(job.Path), err)
 		return false, nil, err
 	}
-	logFileIfThrottled("[hash] hashed %s [%s]", job.Path, filepath.Base(job.Path))
+	logFileIfThrottled(workerID, "[hash] hashed %s [%s]", job.Path, filepath.Base(job.Path))
 	return false, &db.HashUpdate{FileID: job.ID, Hash: h, HashedAt: now, Mtime: job.MTime}, nil
 }
 
-// progressLog logs "N/M files (X%)" and optionally ETA every hashProgressLogInterval or when done.
+// progressLog logs "N/M files (X%)" and optionally ETA. Interval scales with total so we don't flood logs (e.g. every 5k when 169k files).
 // Rate = n/elapsed from start; remaining = (total-n)/rate; ETA = now+remaining. All values kept non-negative.
-func progressLog(completed *atomic.Int64, total int64, phaseStart time.Time) {
+func progressLog(completed *atomic.Int64, total int64, phaseStart time.Time, numWorkers int) {
 	if total <= 0 {
 		return
 	}
 	n := completed.Add(1)
-	if n%hashProgressLogInterval != 0 && n != total {
+	interval := int64(hashProgressLogInterval)
+	if total > 100000 {
+		interval = 5000
+	} else if total > 10000 {
+		interval = 1000
+	} else if total > 1000 {
+		interval = 500
+	}
+	if n%interval != 0 && n != total {
 		return
 	}
 	// Cap at total so we never show >100% or negative remaining when n races past total.
@@ -334,6 +351,9 @@ func progressLog(completed *atomic.Int64, total int64, phaseStart time.Time) {
 	}
 	pct := float64(100) * float64(displayN) / float64(total)
 	msg := fmt.Sprintf("[hash] progress: %d/%d files (%.1f%%)", displayN, total, pct)
+	if numWorkers > 1 {
+		msg += fmt.Sprintf(" (%d workers)", numWorkers)
+	}
 	elapsed := time.Since(phaseStart)
 	if displayN >= total {
 		msg += fmt.Sprintf(" | done in %s", formatDuration(elapsed))
