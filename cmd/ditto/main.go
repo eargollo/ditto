@@ -60,12 +60,7 @@ func main() {
 	log.Printf("init: database connected")
 
 	log.Printf("init: running migrations")
-	if _, err := database.Exec("SET lock_timeout = '300s'"); err != nil {
-		log.Printf("init: SET lock_timeout failed: %v", err)
-		log.Fatalf("init: migrate: %v", err)
-	}
-	var migrateProgress db.MigrationProgress
-	if err := db.RunMigrations(database, &migrateProgress); err != nil {
+	if err := runMigrations(cfg.DatabaseURL()); err != nil {
 		log.Printf("init: migrate failed: %v", err)
 		log.Fatalf("init: migrate: %v", err)
 	}
@@ -180,6 +175,20 @@ func runScan(ctx context.Context, database *sql.DB, rootPath string) {
 		log.Fatalf("hash phase: %v", err)
 	}
 	log.Printf("Hash phase complete for scan %d. Use the Web UI to view duplicates.", scanID)
+}
+
+// runMigrations runs pending migrations using a dedicated connection (the migrate library closes it).
+// Must not be passed the app's database—the driver closes the DB when done.
+func runMigrations(databaseURL string) error {
+	migrateDB, err := db.OpenPostgres(databaseURL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = migrateDB.Close() }()
+	if _, err := migrateDB.Exec("SET lock_timeout = '300s'"); err != nil {
+		return err
+	}
+	return db.RunMigrations(migrateDB, nil)
 }
 
 // openDBWithRetry opens the database, retrying up to attempts times with interval between tries.
