@@ -12,10 +12,10 @@ go run ./cmd/ditto
 # Web UI at http://localhost:8080
 ```
 
-Data is stored in `./data` by default. To use a different directory or port:
+To use a different port:
 
 ```bash
-DITTO_DATA_DIR=/path/to/data DITTO_PORT=3000 go run ./cmd/ditto
+DITTO_PORT=3000 go run ./cmd/ditto
 ```
 
 ### Docker
@@ -56,8 +56,8 @@ docker compose up -d
 3. **Create a folder** for Ditto data (e.g. `Docker/ditto/data`) in File Station. It will be owned by your user.
 4. **Create a container** in Container Manager:
    - **Image:** `ghcr.io/eargollo/ditto:latest` (or a version tag like `ghcr.io/eargollo/ditto:v0.1.0`).
-   - **Environment:** `DITTO_DATA_DIR=/data`, `DITTO_PORT=8080`, `PUID=<your UID>`, `PGID=<your GID>`.
-   - **Volume:** mount your folder → container path `/data` (e.g. `Docker/ditto/data` → `/data`).
+   - **Environment:** `DATABASE_URL=...`, `DITTO_PORT=8080`, `PUID=<your UID>`, `PGID=<your GID>`.
+   - **Volume (optional):** only if you mount host folders to scan; no app data volume needed (state is in Postgres).
    - **Optional — folders to scan:** mount shared folders so they appear inside the container (e.g. `Photos` → `/scan/Photos`). In the UI, add scan root **`/scan/Photos`** (the path inside the container).
    - **Port:** map container port 8080 to a host port (e.g. 8080 or 32480).
 5. **Start the container** and open **`http://<NAS-IP>:<host-port>`** in a browser.
@@ -71,12 +71,10 @@ services:
     container_name: ditto
     restart: unless-stopped
     environment:
-      DITTO_DATA_DIR: /data
       DITTO_PORT: 8080
       PUID: 1026   # your UID from "id admin"
       PGID: 100    # your GID
     volumes:
-      - /volume1/docker/ditto/data:/data
       - /volume1/Photos:/scan/Photos:ro
     ports:
       - "8080:8080"
@@ -88,9 +86,9 @@ In the UI, add scan root **`/scan/Photos`**. For more detail (permissions, troub
 
 | Variable           | Default   | Description                    |
 |-------------------|-----------|--------------------------------|
-| `DITTO_DATA_DIR`  | `./data`  | Directory for SQLite DB and data. |
+| `DATABASE_URL`    | (required) | PostgreSQL connection URL. All state is stored in Postgres. |
 | `DITTO_PORT`      | `8080`    | HTTP port for the web UI.     |
-| `PUID` / `PGID`   | `1000` / `1000` | (Docker only) Run the app as this user. On Synology, set to your DSM user's UID/GID when you mount a **host folder** for `/data` so the app can write to it. Use `id youruser` on the NAS to get the values. |
+| `PUID` / `PGID`   | `1000` / `1000` | (Docker only) Run the app as this user. On Synology, set to your DSM user's UID/GID when you mount host folders to scan. Use `id youruser` on the NAS to get the values. |
 
 ## Reference mode (validating correctness)
 

@@ -21,12 +21,9 @@ COPY --from=builder /ditto /app/ditto
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
-ENV DITTO_DATA_DIR=/data
 ENV DITTO_PORT=8080
 
-# Persist data and optional scan mounts at /data and /scan
-VOLUME ["/data"]
 EXPOSE 8080
 
-# Start as root so we can chown /data; then run app as ditto
+# Start as root so we can create run-as user; then run app as ditto
 ENTRYPOINT ["/docker-entrypoint.sh"]

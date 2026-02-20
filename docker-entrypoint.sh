@@ -1,6 +1,6 @@
 #!/bin/sh
 set -e
-# Optional: run as Synology (or host) user so /data can be a folder owned by that user.
+# Optional: run as Synology (or host) user for volume permissions (e.g. scan folders).
 # Set PUID and PGID to your DSM user's UID/GID (e.g. 1026:100 for admin). Default 1000:1000.
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
@@ -16,5 +16,4 @@ else
   adduser -D -u "$PUID" -G "$GROUP" ditto
   RUNAS=ditto
 fi
-chown -R "$PUID:$PGID" /data 2>/dev/null || true
 exec su "$RUNAS" -s /bin/sh -c "exec /app/ditto"

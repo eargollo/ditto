@@ -36,7 +36,6 @@ Add the following:
 |-------------------|---------|--------------------------------------|
 | `DITTO_PORT`      | `8080`  | Port the app listens on inside the container. |
 | `DATABASE_URL`    | (required) | PostgreSQL connection URL. All Ditto state (folders, scans, files) is stored in Postgres. |
-| `DITTO_DATA_DIR`  | (optional) | Local app data directory; default `./data`. Not used for the database. You can omit it in Docker. |
 | `PUID` / `PGID`   | (optional) | Override container user when needed for volume permissions (e.g. scan folders). |
 
 **Optional – scan pipeline (for NAS / low-resource):**  

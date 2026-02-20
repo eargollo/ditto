@@ -34,11 +34,11 @@
 
 ### 1.2 Config is a concrete struct, not an interface (High)
 
-**Finding:** `config.Config` is a struct with getters (`DataDir()`, `Port()`, `DatabaseURL()`). No interface abstracts configuration.
+**Finding:** `config.Config` is a struct with getters (`Port()`, `DatabaseURL()`). No interface abstracts configuration.
 
-**Impact:** Tests that need different configs (e.g. port 0, custom data dir) must use the real `config.Load()` and often env vars. No clean way to inject “test config” without touching the environment.
+**Impact:** Tests that need different configs (e.g. port 0) must use the real `config.Load()` and often env vars. No clean way to inject “test config” without touching the environment.
 
-**Recommendation:** If you introduce dependency injection for the server, consider a small `Config` interface (e.g. `DataDir() string`, `Port() int`, `DatabaseURL() string`) and have the concrete `*config.Config` implement it so tests can inject a stub config.
+**Recommendation:** If you introduce dependency injection for the server, consider a small `Config` interface (e.g. `Port() int`, `DatabaseURL() string`) and have the concrete `*config.Config` implement it so tests can inject a stub config.
 
 ---
 

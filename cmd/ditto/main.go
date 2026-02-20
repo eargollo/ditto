@@ -41,22 +41,25 @@ func main() {
 	}
 	log.Printf("Ditto starting version=%s", ver)
 
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("init: panic: %v", r)
+			os.Exit(1)
+		}
+	}()
+
 	log.Printf("init: loading config")
 	cfg, err := config.Load()
 	if err != nil {
+		log.Printf("init: config failed: %v", err)
 		log.Fatalf("init: config: %v", err)
 	}
-	log.Printf("init: config loaded data_dir=%s port=%d", cfg.DataDir(), cfg.Port())
-
-	log.Printf("init: creating data directory %s", cfg.DataDir())
-	dataDir := cfg.DataDir()
-	if err := os.MkdirAll(dataDir, 0750); err != nil {
-		log.Fatalf("init: create data dir %q: %v", dataDir, err)
-	}
+	log.Printf("init: config loaded port=%d", cfg.Port())
 
 	log.Printf("init: connecting to database")
 	database, err := openDBWithRetry(cfg.DatabaseURL(), 5, 2*time.Second)
 	if err != nil {
+		log.Printf("init: open database failed: %v", err)
 		log.Fatalf("init: open database: %v", err)
 	}
 	defer database.Close()
@@ -64,6 +67,7 @@ func main() {
 
 	log.Printf("init: running migrations")
 	if err := db.MigratePostgres(database); err != nil {
+		log.Printf("init: migrate failed: %v", err)
 		log.Fatalf("init: migrate: %v", err)
 	}
 	log.Printf("init: migrations done")
@@ -82,6 +86,7 @@ func main() {
 	log.Printf("init: building HTTP server")
 	srv, err := server.NewServer(cfg, database)
 	if err != nil {
+		log.Printf("init: NewServer failed: %v", err)
 		log.Fatalf("init: NewServer: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -95,6 +100,7 @@ func main() {
 	log.Printf("init: starting HTTP server on port %d", cfg.Port())
 	log.Printf("Web UI at http://localhost:%d", cfg.Port())
 	if err := srv.Run(ctx); err != nil {
+		log.Printf("init: server Run failed: %v", err)
 		log.Fatalf("init: server Run: %v", err)
 	}
 }
