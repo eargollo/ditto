@@ -32,7 +32,7 @@ func TestPostgresDB(t *testing.T) Database {
 	url := TestDatabaseURL()
 	conn, err := OpenPostgres(url)
 	if err != nil {
-		t.Fatalf("open postgres: %v", err)
+		t.Fatalf("open postgres: %v (tests require Postgres; start with: docker compose -f docker-compose.dev.yml up -d; then: DITTO_TEST_DATABASE_URL=%s go run ./cmd/ditto migrate)", err, url)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	tx, err := conn.BeginTx(context.Background(), nil)

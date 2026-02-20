@@ -44,6 +44,17 @@
     return div.innerHTML;
   }
 
+  var imageExts = { '.jpg': 1, '.jpeg': 1, '.png': 1, '.gif': 1, '.webp': 1, '.bmp': 1 };
+  var videoExts = { '.mp4': 1, '.webm': 1, '.mkv': 1, '.mov': 1, '.avi': 1, '.m4v': 1 };
+  function ext(path) {
+    var i = path.lastIndexOf('.');
+    return i >= 0 ? path.slice(i).toLowerCase() : '';
+  }
+  function isPreviewable(path) { return imageExts[ext(path)] || videoExts[ext(path)]; }
+  function hasImageExt(path) { return !!imageExts[ext(path)]; }
+  function hasVideoExt(path) { return !!videoExts[ext(path)]; }
+  function previewURL(path) { return '/preview?path=' + encodeURIComponent(path); }
+
   // --- Home (/) ---
   function renderHome(summary, data) {
     var groups = data.groups || [];
@@ -55,19 +66,17 @@
     var nextPage = page < totalPages ? page + 1 : 0;
 
     var summaryHtml =
-      '<div class="mt-4 p-4 rounded-lg bg-gray-50 border border-gray-200">' +
-      '<p class="text-gray-800 font-medium">Summary</p>' +
-      '<p class="mt-1 text-gray-600">' +
-      summary.group_count +
-      ' duplicate group' +
-      (summary.group_count !== 1 ? 's' : '') +
-      ' · ' +
-      summary.total_files +
-      ' duplicated file' +
-      (summary.total_files !== 1 ? 's' : '') +
-      ' · ' +
-      formatBytes(summary.reclaimable_size) +
-      ' can be saved</p></div>';
+      '<dl class="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-4">' +
+      '<div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">' +
+      '<dt class="text-sm font-medium text-gray-500 uppercase tracking-wide">Duplicate groups</dt>' +
+      '<dd class="mt-1 text-2xl font-semibold text-gray-900">' + summary.group_count + '</dd></div>' +
+      '<div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">' +
+      '<dt class="text-sm font-medium text-gray-500 uppercase tracking-wide">Duplicated files</dt>' +
+      '<dd class="mt-1 text-2xl font-semibold text-gray-900">' + summary.total_files + '</dd></div>' +
+      '<div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">' +
+      '<dt class="text-sm font-medium text-gray-500 uppercase tracking-wide">Reclaimable</dt>' +
+      '<dd class="mt-1 text-2xl font-bold text-blue-600">' + formatBytes(summary.reclaimable_size) + '</dd></div>' +
+      '</dl>';
 
     var groupsHtml = '';
     if (groups.length) {
@@ -87,34 +96,39 @@
               .join('');
             var more =
               truncated
-                ? '<p class="px-4 py-2 text-sm text-gray-500 border-t border-gray-200">First ' +
-                  paths.length +
-                  ' shown. <a href="/duplicates/hash/' +
-                  escapeHtml(g.hash) +
-                  '" class="text-blue-600 hover:underline">View all ' +
-                  g.file_count +
-                  ' files</a></p>'
+                ? '<p class="px-4 py-2 text-sm text-gray-500 border-t border-gray-200">First ' + paths.length + ' of ' + g.file_count + ' files shown.</p>'
                 : '';
+            var firstPath = paths[0];
+            var previewHtml = '';
+            if (firstPath && isPreviewable(firstPath)) {
+              if (hasImageExt(firstPath)) {
+                previewHtml =
+                  '<div class="shrink-0 w-full sm:w-72 bg-gray-50 flex items-center justify-center p-4 min-h-[200px] sm:min-h-0">' +
+                  '<a href="' + previewURL(firstPath) + '" target="_blank" rel="noopener" class="block max-w-full max-h-[280px]">' +
+                  '<img src="' + previewURL(firstPath) + '" alt="" class="max-w-full max-h-[280px] object-contain rounded-lg shadow-sm" loading="lazy" />' +
+                  '</a></div>';
+              } else if (hasVideoExt(firstPath)) {
+                previewHtml =
+                  '<div class="shrink-0 w-full sm:w-72 bg-gray-50 flex items-center justify-center p-4 min-h-[200px] sm:min-h-0">' +
+                  '<video src="' + previewURL(firstPath) + '" controls class="max-w-full max-h-[280px] rounded-lg shadow-sm" preload="metadata"></video>' +
+                  '</div>';
+              }
+            }
             return (
-              '<section class="border border-gray-200 rounded-lg bg-white overflow-hidden">' +
-              '<div class="px-4 py-3 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center gap-4">' +
-              '<span class="font-semibold text-gray-800">' +
-              g.file_count +
-              ' file' +
-              (g.file_count !== 1 ? 's' : '') +
-              ' · ' +
-              formatBytes(perFile) +
-              ' each · ' +
-              formatBytes(g.total_size) +
-              ' group total</span> ' +
-              '<a href="/duplicates/hash/' +
-              escapeHtml(g.hash) +
-              '" class="text-sm text-blue-600 hover:underline">View group details</a>' +
-              '</div>' +
+              '<section class="border border-gray-200 rounded-lg bg-white overflow-hidden shadow-sm flex flex-col sm:flex-row">' +
+              '<div class="flex-1 min-w-0 border-b border-gray-200 sm:border-b-0 sm:border-r border-gray-200">' +
+              '<header class="px-4 py-4">' +
+              '<p class="text-lg font-semibold text-gray-900">' +
+              g.file_count + ' file' + (g.file_count !== 1 ? 's' : '') +
+              ' <span class="text-gray-500 font-normal text-base">· ' + formatBytes(perFile) + ' each</span></p>' +
+              '<p class="text-sm text-gray-500 mt-0.5">Group total: ' + formatBytes(g.total_size) + '</p>' +
+              '</header>' +
               '<div class="px-4 py-3"><div class="space-y-1">' +
               pathsHtml +
               '</div></div>' +
               more +
+              '</div>' +
+              previewHtml +
               '</section>'
             );
           })

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/eargollo/ditto/internal/config"
 	"github.com/eargollo/ditto/internal/db"
@@ -40,43 +41,48 @@ func main() {
 	}
 	log.Printf("Ditto starting version=%s", ver)
 
+	log.Printf("init: loading config")
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		log.Fatalf("init: config: %v", err)
 	}
-	log.Printf("config loaded: data_dir=%s port=%d", cfg.DataDir(), cfg.Port())
+	log.Printf("init: config loaded data_dir=%s port=%d", cfg.DataDir(), cfg.Port())
 
+	log.Printf("init: creating data directory %s", cfg.DataDir())
 	dataDir := cfg.DataDir()
 	if err := os.MkdirAll(dataDir, 0750); err != nil {
-		log.Fatalf("create data dir %q: %v", dataDir, err)
+		log.Fatalf("init: create data dir %q: %v", dataDir, err)
 	}
 
-	log.Printf("connecting to database")
-	database, err := db.OpenPostgres(cfg.DatabaseURL())
+	log.Printf("init: connecting to database")
+	database, err := openDBWithRetry(cfg.DatabaseURL(), 5, 2*time.Second)
 	if err != nil {
-		log.Fatalf("open database: %v", err)
+		log.Fatalf("init: open database: %v", err)
 	}
 	defer database.Close()
-	log.Printf("database connected")
+	log.Printf("init: database connected")
 
+	log.Printf("init: running migrations")
 	if err := db.MigratePostgres(database); err != nil {
-		log.Fatalf("migrate: %v", err)
+		log.Fatalf("init: migrate: %v", err)
 	}
-	log.Printf("migrations done")
+	log.Printf("init: migrations done")
 
+	log.Printf("init: running backfill (deleted_at)")
 	if err := db.BackfillFilesDeletedAt(context.Background(), database); err != nil {
-		log.Printf("backfill deleted_at: %v", err)
+		log.Printf("init: backfill deleted_at failed (non-fatal): %v", err)
 	}
+	log.Printf("init: backfill done")
 
 	if len(os.Args) >= 3 && os.Args[1] == "scan" {
 		runScan(context.Background(), database, os.Args[2])
 		return
 	}
 
-	log.Printf("starting HTTP server")
+	log.Printf("init: building HTTP server")
 	srv, err := server.NewServer(cfg, database)
 	if err != nil {
-		log.Fatalf("server: %v", err)
+		log.Fatalf("init: NewServer: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -86,9 +92,10 @@ func main() {
 		<-sig
 		cancel()
 	}()
+	log.Printf("init: starting HTTP server on port %d", cfg.Port())
 	log.Printf("Web UI at http://localhost:%d", cfg.Port())
 	if err := srv.Run(ctx); err != nil {
-		log.Fatalf("server: %v", err)
+		log.Fatalf("init: server Run: %v", err)
 	}
 }
 
@@ -176,22 +183,45 @@ func runScan(ctx context.Context, database *sql.DB, rootPath string) {
 	log.Printf("Hash phase complete for scan %d. Use the Web UI to view duplicates.", scanID)
 }
 
+// openDBWithRetry opens the database, retrying up to attempts times with interval between tries.
+// Use this at server startup so the app can wait for Postgres to become ready (e.g. in Docker).
+func openDBWithRetry(url string, attempts int, interval time.Duration) (*sql.DB, error) {
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		conn, err := db.OpenPostgres(url)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		if i < attempts-1 {
+			log.Printf("init: database connect attempt %d/%d failed: %v; retrying in %v", i+1, attempts, err, interval)
+			time.Sleep(interval)
+		}
+	}
+	log.Printf("init: database connect failed after %d attempts: %v", attempts, lastErr)
+	return nil, lastErr
+}
+
 func runMigrate() {
+	log.Print("migrate: starting")
 	url := os.Getenv("DITTO_TEST_DATABASE_URL")
 	if url == "" {
+		log.Print("migrate: loading config for DATABASE_URL")
 		cfg, err := config.Load()
 		if err != nil {
-			log.Fatalf("config: %v", err)
+			log.Fatalf("migrate: config: %v", err)
 		}
 		url = cfg.DatabaseURL()
 	}
+	log.Print("migrate: opening database")
 	conn, err := db.OpenPostgres(url)
 	if err != nil {
-		log.Fatalf("open database: %v", err)
+		log.Fatalf("migrate: open database: %v", err)
 	}
 	defer conn.Close()
+	log.Print("migrate: running migrations")
 	if err := db.MigratePostgres(conn); err != nil {
-		log.Fatalf("migrate: %v", err)
+		log.Fatalf("migrate: run migrations: %v", err)
 	}
 	log.Print("migrate: done")
 }

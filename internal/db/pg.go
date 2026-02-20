@@ -13,24 +13,31 @@ import (
 func OpenPostgres(url string) (*sql.DB, error) {
 	db, err := sql.Open("pgx", url)
 	if err != nil {
+		log.Printf("db: sql.Open failed: %v", err)
 		return nil, err
 	}
 	if err := db.Ping(); err != nil {
+		log.Printf("db: ping failed: %v", err)
 		_ = db.Close()
 		return nil, err
 	}
 	// Allow concurrent readers and writers; no need for a separate read-only pool.
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(5)
+	// Recycle connections so we don't use ones closed by the server (proxies, managed Postgres, firewalls).
+	// Order matters: set ConnMaxLifetime before ConnMaxIdleTime.
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetConnMaxIdleTime(1 * time.Minute)
 	return db, nil
 }
 
 // MigratePostgres creates the folders, files, scans, and file_scan tables and indexes if they do not exist.
 // Idempotent; safe to call on every startup.
 func MigratePostgres(db *sql.DB) error {
-	log.Printf("running database migrations")
+	log.Printf("db: running migrations")
 	// Avoid hanging forever if another process holds a schema lock (e.g. another instance migrating).
 	if _, err := db.Exec("SET lock_timeout = '60s'"); err != nil {
+		log.Printf("db: migrate SET lock_timeout failed: %v", err)
 		return err
 	}
 	// Use timestamptz for all timestamps; store in UTC.
@@ -92,27 +99,29 @@ func MigratePostgres(db *sql.DB) error {
 			reclaimable_size BIGINT NOT NULL
 		)`,
 	}
-	for _, q := range ddl {
+	for i, q := range ddl {
 		if _, err := db.Exec(q); err != nil {
+			log.Printf("db: migrate DDL step %d failed: %v", i+1, err)
 			return err
 		}
 	}
 	// Allow inode to be NULL for existing DBs created with inode NOT NULL (no-op if already nullable).
 	if _, err := db.Exec("ALTER TABLE files ALTER COLUMN inode DROP NOT NULL"); err != nil {
-		_ = err
+		log.Printf("db: migrate ALTER inode (non-fatal): %v", err)
 	}
 	// Add deleted_at to files for existing DBs (no-op if column exists).
 	if _, err := db.Exec("ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ"); err != nil {
-		_ = err
+		log.Printf("db: migrate ADD deleted_at (non-fatal): %v", err)
 	}
 	// Add deleted_at_update_duration_ms to scans for existing DBs (no-op if column exists).
 	if _, err := db.Exec("ALTER TABLE scans ADD COLUMN IF NOT EXISTS deleted_at_update_duration_ms BIGINT"); err != nil {
-		_ = err
+		log.Printf("db: migrate ADD deleted_at_update_duration_ms (non-fatal): %v", err)
 	}
 	// Add hashed_mtime to files for existing DBs (no-op if column exists).
 	if _, err := db.Exec("ALTER TABLE files ADD COLUMN IF NOT EXISTS hashed_mtime BIGINT"); err != nil {
-		_ = err
+		log.Printf("db: migrate ADD hashed_mtime (non-fatal): %v", err)
 	}
+	log.Printf("db: migrations completed")
 	return nil
 }
 

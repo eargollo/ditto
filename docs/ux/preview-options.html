@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ditto — UX options preview</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 text-gray-900 antialiased">
+  <div class="max-w-4xl mx-auto py-8 px-4 space-y-16">
+    <h1 class="text-2xl font-bold text-gray-800">Ditto UX options — quick preview</h1>
+    <p class="text-gray-600">Compare the three directions. Scroll down to see Option A, B, and C.</p>
+
+    <!-- Option A: Clean dashboard -->
+    <section class="space-y-4">
+      <h2 class="text-lg font-semibold text-gray-700 border-b border-gray-300 pb-2">Option A — Clean dashboard</h2>
+      <div class="rounded-lg overflow-hidden shadow-sm border border-gray-200 bg-white">
+        <nav class="bg-slate-800 px-4 py-3 flex items-center justify-between">
+          <div class="flex gap-4 items-center">
+            <a href="#" class="text-white font-semibold">Ditto</a>
+            <a href="#" class="text-white/90 hover:text-white hover:underline">Scans</a>
+          </div>
+          <span class="text-white/70 text-sm">v1.0.0</span>
+        </nav>
+        <div class="p-6 bg-gray-50">
+          <h3 class="text-xl font-bold text-gray-900">Duplicate groups</h3>
+          <p class="mt-1 text-gray-600 text-sm">Files grouped by identical content. <a href="#" class="text-blue-600 hover:underline">Scans</a>.</p>
+          <div class="mt-4 p-4 rounded-lg bg-slate-50 border border-slate-200">
+            <p class="text-sm font-semibold text-slate-600 uppercase tracking-wide">Summary</p>
+            <p class="mt-1 text-gray-700">12 duplicate groups · 48 duplicated files · 2.3 GB can be saved</p>
+          </div>
+          <div class="mt-4 rounded-lg border border-gray-200 bg-white overflow-hidden">
+            <div class="px-4 py-3 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center gap-4">
+              <span class="font-semibold text-gray-800">4 files · 128 MB each · 512 MB group total</span>
+              <a href="#" class="text-sm text-blue-600 hover:underline">View group details</a>
+            </div>
+            <div class="px-4 py-3 divide-y divide-gray-200">
+              <div class="py-2 font-mono text-sm text-gray-700">/home/user/docs/file1.pdf</div>
+              <div class="py-2 font-mono text-sm text-gray-700">/backup/docs/file1.pdf</div>
+            </div>
+          </div>
+          <div class="mt-4 flex gap-2">
+            <button type="button" class="px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Start scan</button>
+            <button type="button" class="px-4 py-2.5 border border-gray-300 bg-white rounded-lg hover:bg-gray-50 font-medium">Add root</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Option B: Dark sidebar -->
+    <section class="space-y-4">
+      <h2 class="text-lg font-semibold text-gray-700 border-b border-gray-300 pb-2">Option B — Dark sidebar</h2>
+      <div class="rounded-lg overflow-hidden shadow-md border border-gray-200 bg-white">
+        <nav class="bg-gray-900 px-4 py-3 flex items-center justify-between">
+          <div class="flex gap-4 items-center">
+            <a href="#" class="text-white font-semibold">Ditto</a>
+            <a href="#" class="text-gray-300 hover:bg-white/10 hover:text-white px-2 py-1 rounded">Scans</a>
+          </div>
+          <span class="text-gray-500 text-sm">v1.0.0</span>
+        </nav>
+        <div class="p-6 bg-white">
+          <h3 class="text-xl font-bold text-gray-900">Duplicate groups</h3>
+          <p class="mt-1 text-gray-600 text-sm">Files grouped by identical content. <a href="#" class="text-blue-600 hover:underline">Scans</a>.</p>
+          <div class="mt-4 p-4 rounded-lg bg-gray-50 border border-gray-200">
+            <p class="text-sm font-semibold text-gray-500 uppercase tracking-wide">Summary</p>
+            <p class="mt-1 text-gray-700">12 duplicate groups · 48 duplicated files · 2.3 GB can be saved</p>
+          </div>
+          <div class="mt-4 rounded-lg border border-gray-200 overflow-hidden">
+            <div class="px-4 py-3 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center gap-4">
+              <span class="font-semibold text-gray-800">4 files · 128 MB each · 512 MB group total</span>
+              <a href="#" class="text-sm text-blue-600 hover:underline">View group details</a>
+            </div>
+            <div class="px-4 py-3 divide-y divide-gray-200">
+              <div class="py-2 font-mono text-sm text-gray-700 hover:bg-gray-50">/home/user/docs/file1.pdf</div>
+              <div class="py-2 font-mono text-sm text-gray-700 hover:bg-gray-50">/backup/docs/file1.pdf</div>
+            </div>
+          </div>
+          <div class="mt-4 flex gap-2">
+            <button type="button" class="px-4 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium">Start scan</button>
+            <button type="button" class="px-4 py-2.5 border border-gray-300 bg-white rounded-lg hover:bg-gray-50 font-medium">Add root</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Option C: Minimal with accent -->
+    <section class="space-y-4">
+      <h2 class="text-lg font-semibold text-gray-700 border-b border-gray-300 pb-2">Option C — Minimal with accent (teal)</h2>
+      <div class="rounded-xl overflow-hidden shadow-sm border border-gray-200 bg-white">
+        <nav class="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+          <div class="flex gap-6 items-center">
+            <a href="#" class="text-teal-600 font-semibold text-lg">Ditto</a>
+            <a href="#" class="text-gray-600 hover:text-teal-600">Scans</a>
+          </div>
+          <span class="text-gray-400 text-sm">v1.0.0</span>
+        </nav>
+        <div class="p-8 bg-white">
+          <h3 class="text-2xl font-bold text-gray-900">Duplicate groups</h3>
+          <p class="mt-1 text-gray-600">Files grouped by identical content. <a href="#" class="text-teal-600 hover:underline font-medium">Scans</a>.</p>
+          <div class="mt-6 p-5 rounded-xl border border-gray-100 bg-gray-50/80">
+            <p class="text-gray-600"><span class="font-bold text-teal-600">12</span> duplicate groups · 48 duplicated files · 2.3 GB can be saved</p>
+          </div>
+          <div class="mt-6 rounded-xl border border-gray-100 overflow-hidden">
+            <div class="px-5 py-4 flex flex-wrap items-center gap-4 border-b border-gray-100">
+              <span class="font-semibold text-gray-800">4 files · 128 MB each · 512 MB group total</span>
+              <a href="#" class="text-sm font-medium text-teal-600 hover:underline">View group details</a>
+            </div>
+            <div class="px-5 py-3 divide-y divide-gray-100">
+              <div class="py-3 font-mono text-sm text-gray-700">/home/user/docs/file1.pdf</div>
+              <div class="py-3 font-mono text-sm text-gray-700">/backup/docs/file1.pdf</div>
+            </div>
+          </div>
+          <div class="mt-6 flex gap-3">
+            <button type="button" class="px-4 py-2.5 bg-teal-600 text-white rounded-lg hover:bg-teal-700 font-medium">Start scan</button>
+            <button type="button" class="px-4 py-2.5 border border-gray-200 bg-white rounded-lg hover:bg-gray-50 font-medium text-gray-700">Add root</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <p class="text-sm text-gray-500 pt-4">Open this file in a browser (file:// or from a static server). Uses Tailwind CDN for preview only; real build will use Tailwind CLI.</p>
+  </div>
+</body>
+</html>

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 )
@@ -135,47 +136,50 @@ func InsertFileScanBatch(ctx context.Context, q Querier, fileIDs []int64, scanID
 	return err
 }
 
+// UpdateFilesDeletedAtNotInScan marks files in the folder that are not in this scan as deleted (sets deleted_at to now if not already set).
+// Call after a scan completes. Use with UpdateFilesDeletedAtInScan for the full update.
+func UpdateFilesDeletedAtNotInScan(ctx context.Context, q Querier, scanID, folderID int64) error {
+	_, err := q.ExecContext(ctx,
+		`UPDATE files SET deleted_at = COALESCE(deleted_at, (NOW() AT TIME ZONE 'UTC'))
+		 WHERE folder_id = $2 AND id NOT IN (SELECT file_id FROM file_scan WHERE scan_id = $1)`,
+		scanID, folderID)
+	return err
+}
+
+// UpdateFilesDeletedAtInScan sets deleted_at = NULL for files in this scan and resets hash fields to pending when mtime changed.
+// Call after UpdateFilesDeletedAtNotInScan. Uses a JOIN so the "in scan" set is computed once.
+func UpdateFilesDeletedAtInScan(ctx context.Context, q Querier, scanID int64) error {
+	_, err := q.ExecContext(ctx,
+		`UPDATE files SET
+			deleted_at = NULL,
+			hash_status = CASE WHEN (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN 'pending' ELSE hash_status END,
+			hash = CASE WHEN (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN NULL ELSE hash END,
+			hashed_at = CASE WHEN (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN NULL ELSE hashed_at END,
+			hashed_mtime = CASE WHEN (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN NULL ELSE hashed_mtime END
+		 FROM file_scan WHERE files.id = file_scan.file_id AND file_scan.scan_id = $1`,
+		scanID)
+	return err
+}
+
 // UpdateFilesDeletedAtForScan updates deleted_at for all files in the given folder: NULL for files in the scan, now() for files not in the scan.
 // Sets hash_status = 'pending' (and clears hash, hashed_at, hashed_mtime) for files in the scan whose mtime changed since last hash (mtime != hashed_mtime) or never hashed.
 // Clearing hash avoids stale hashes for files that are no longer duplicate-size candidates; tests must allow mtime to change (e.g. sleep after write) on 1s-resolution filesystems.
 // Call after a scan completes (all file_scan rows for that scan are inserted). folderID must be the scan's folder_id.
+// Implemented as two updates (not-in-scan, then in-scan) for better performance on large folders.
 func UpdateFilesDeletedAtForScan(ctx context.Context, q Querier, scanID, folderID int64) error {
-	_, err := q.ExecContext(ctx,
-		`UPDATE files SET
-			deleted_at = CASE
-				WHEN id IN (SELECT file_id FROM file_scan WHERE scan_id = $1) THEN NULL
-				ELSE COALESCE(deleted_at, (NOW() AT TIME ZONE 'UTC'))
-			END,
-			hash_status = CASE
-				WHEN id IN (SELECT file_id FROM file_scan WHERE scan_id = $1)
-					AND (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN 'pending'
-				ELSE hash_status
-			END,
-			hash = CASE
-				WHEN id IN (SELECT file_id FROM file_scan WHERE scan_id = $1)
-					AND (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN NULL
-				ELSE hash
-			END,
-			hashed_at = CASE
-				WHEN id IN (SELECT file_id FROM file_scan WHERE scan_id = $1)
-					AND (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN NULL
-				ELSE hashed_at
-			END,
-			hashed_mtime = CASE
-				WHEN id IN (SELECT file_id FROM file_scan WHERE scan_id = $1)
-					AND (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN NULL
-				ELSE hashed_mtime
-			END
-		WHERE folder_id = $2`,
-		scanID, folderID)
-	return err
+	if err := UpdateFilesDeletedAtNotInScan(ctx, q, scanID, folderID); err != nil {
+		return err
+	}
+	return UpdateFilesDeletedAtInScan(ctx, q, scanID)
 }
 
 // BackfillFilesDeletedAt sets deleted_at for all files based on the latest completed scan per folder.
 // Call once after adding the deleted_at column (e.g. on startup). Idempotent.
 func BackfillFilesDeletedAt(ctx context.Context, q Querier) error {
+	log.Printf("db: backfill deleted_at: listing folders")
 	folders, err := ListFolders(ctx, q)
 	if err != nil {
+		log.Printf("db: backfill deleted_at ListFolders failed: %v", err)
 		return err
 	}
 	for _, folder := range folders {
