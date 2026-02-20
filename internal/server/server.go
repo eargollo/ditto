@@ -178,11 +178,6 @@ func (s *Server) renderPage(w http.ResponseWriter, layoutName, contentName strin
 	_, _ = w.Write(layoutBuf.Bytes())
 }
 
-const homePageSize = 20
-const maxScansForRoots = 100
-const homeMaxPathsPerGroup = 50 // limit paths loaded per group so home page stays fast
-const homeListScansLimit = 300  // recent scans for dropdown (avoids loading huge scan table)
-
 // ScanRootChoice is a root path with its latest scan id for the home dropdown.
 type ScanRootChoice struct {
 	RootPath  string
@@ -221,12 +216,6 @@ func (s *Server) handleHome() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.renderPage(w, "layout.html", "shell-content", &shellData{})
 	}
-}
-
-type scansPageData struct {
-	Scans                  []db.Scan
-	Roots                  []db.ScanRoot
-	IncompleteScanIDByRoot map[string]int64 // root path -> latest incomplete scan id (for Continue per folder)
 }
 
 func (s *Server) handleScans() http.HandlerFunc {

@@ -253,21 +253,6 @@ func listScans(ctx context.Context, q Querier, limit int) ([]Scan, error) {
 	return scans, rows.Err()
 }
 
-// GetLatestCompletedScanIDForFolder returns the most recent scan for the given folder that has completed_at set. Returns 0 if none.
-func GetLatestCompletedScanIDForFolder(ctx context.Context, q Querier, folderID int64) (int64, error) {
-	var id int64
-	err := q.QueryRowContext(ctx,
-		`SELECT id FROM scans WHERE folder_id = $1 AND completed_at IS NOT NULL ORDER BY started_at DESC, id DESC LIMIT 1`,
-		folderID).Scan(&id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return 0, nil
-		}
-		return 0, err
-	}
-	return id, nil
-}
-
 // GetLatestIncompleteScanForFolder returns the most recent scan for the given folder_id that is not fully complete. Returns 0 if none.
 func GetLatestIncompleteScanForFolder(ctx context.Context, q Querier, folderID int64) (int64, error) {
 	var id int64

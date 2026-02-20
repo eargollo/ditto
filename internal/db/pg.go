@@ -9,7 +9,7 @@ import (
 )
 
 // OpenPostgres opens a PostgreSQL database using the given URL (e.g. from DATABASE_URL).
-// Caller must call Close() when done. MigratePostgres should be called after open to create schema.
+// Caller must call Close() when done. RunMigrations should be called after open to apply schema.
 func OpenPostgres(url string) (*sql.DB, error) {
 	db, err := sql.Open("pgx", url)
 	if err != nil {
@@ -30,104 +30,6 @@ func OpenPostgres(url string) (*sql.DB, error) {
 	db.SetConnMaxIdleTime(1 * time.Minute)
 	return db, nil
 }
-
-// MigratePostgres creates the folders, files, scans, and file_scan tables and indexes if they do not exist.
-// Idempotent; safe to call on every startup.
-func MigratePostgres(db *sql.DB) error {
-	log.Printf("db: running migrations")
-	// Avoid hanging forever if another process holds a schema lock (e.g. another instance migrating).
-	// Use 5m so migrations can wait out slow checkpoints or I/O (e.g. 45s+ checkpoints on constrained storage).
-	if _, err := db.Exec("SET lock_timeout = '300s'"); err != nil {
-		log.Printf("db: migrate SET lock_timeout failed: %v", err)
-		return err
-	}
-	log.Printf("db: lock_timeout set (300s), applying DDL")
-	// Use timestamptz for all timestamps; store in UTC.
-	ddl := []string{
-		`CREATE TABLE IF NOT EXISTS folders (
-			id BIGSERIAL PRIMARY KEY,
-			path TEXT NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')
-		)`,
-		`CREATE TABLE IF NOT EXISTS scans (
-			id BIGSERIAL PRIMARY KEY,
-			folder_id BIGINT NOT NULL REFERENCES folders(id),
-			started_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
-			completed_at TIMESTAMPTZ,
-			hash_started_at TIMESTAMPTZ,
-			hash_completed_at TIMESTAMPTZ,
-			file_count BIGINT,
-			scan_skipped_count BIGINT,
-			hashed_file_count BIGINT,
-			hashed_byte_count BIGINT,
-			hash_reused_count BIGINT,
-			hash_error_count BIGINT,
-			deleted_at_update_duration_ms BIGINT
-		)`,
-		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_scans_folder_id ON scans(folder_id)`,
-		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_scans_started_at ON scans(started_at DESC)`,
-		`CREATE TABLE IF NOT EXISTS files (
-			id BIGSERIAL PRIMARY KEY,
-			folder_id BIGINT NOT NULL REFERENCES folders(id),
-			path TEXT NOT NULL,
-			size BIGINT NOT NULL,
-			mtime BIGINT NOT NULL,
-			inode BIGINT,
-			device_id BIGINT,
-			hash TEXT,
-			hash_status TEXT NOT NULL DEFAULT 'pending',
-			hashed_at TIMESTAMPTZ,
-			hashed_mtime BIGINT,
-			deleted_at TIMESTAMPTZ,
-			UNIQUE(folder_id, path)
-		)`,
-		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_files_folder_id ON files(folder_id)`,
-		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_files_folder_id_path ON files(folder_id, path)`,
-		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_files_hash_status ON files(hash_status)`,
-		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_files_hash ON files(hash) WHERE hash IS NOT NULL`,
-		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_files_inode_device ON files(inode, device_id)`,
-		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_files_inode_device_size ON files(inode, device_id, size)`,
-		`CREATE TABLE IF NOT EXISTS file_scan (
-			file_id BIGINT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-			scan_id BIGINT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
-			PRIMARY KEY (file_id, scan_id)
-		)`,
-		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_file_scan_scan_id ON file_scan(scan_id)`,
-		`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_file_scan_file_id ON file_scan(file_id)`,
-		`CREATE TABLE IF NOT EXISTS duplicate_groups_hash (
-			hash TEXT PRIMARY KEY,
-			file_count BIGINT NOT NULL,
-			total_size BIGINT NOT NULL,
-			reclaimable_size BIGINT NOT NULL
-		)`,
-	}
-	for i, q := range ddl {
-		log.Printf("db: migration step %d/%d", i+1, len(ddl))
-		if _, err := db.Exec(q); err != nil {
-			log.Printf("db: migrate DDL step %d failed: %v", i+1, err)
-			return err
-		}
-	}
-	// Allow inode to be NULL for existing DBs created with inode NOT NULL (no-op if already nullable).
-	if _, err := db.Exec("ALTER TABLE files ALTER COLUMN inode DROP NOT NULL"); err != nil {
-		log.Printf("db: migrate ALTER inode (non-fatal): %v", err)
-	}
-	// Add deleted_at to files for existing DBs (no-op if column exists).
-	if _, err := db.Exec("ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ"); err != nil {
-		log.Printf("db: migrate ADD deleted_at (non-fatal): %v", err)
-	}
-	// Add deleted_at_update_duration_ms to scans for existing DBs (no-op if column exists).
-	if _, err := db.Exec("ALTER TABLE scans ADD COLUMN IF NOT EXISTS deleted_at_update_duration_ms BIGINT"); err != nil {
-		log.Printf("db: migrate ADD deleted_at_update_duration_ms (non-fatal): %v", err)
-	}
-	// Add hashed_mtime to files for existing DBs (no-op if column exists).
-	if _, err := db.Exec("ALTER TABLE files ADD COLUMN IF NOT EXISTS hashed_mtime BIGINT"); err != nil {
-		log.Printf("db: migrate ADD hashed_mtime (non-fatal): %v", err)
-	}
-	log.Printf("db: migrations completed")
-	return nil
-}
-
 
 // NowUTC returns current UTC time for use in queries (Postgres timestamptz).
 func NowUTC() time.Time {
