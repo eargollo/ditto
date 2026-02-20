@@ -89,13 +89,15 @@ func (s *Server) handlePreview() http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		var absRoot string
 		var allowed bool
 		for _, root := range roots {
-			absRoot, err := filepath.Abs(filepath.Clean(root.Path))
+			r, err := filepath.Abs(filepath.Clean(root.Path))
 			if err != nil {
 				continue
 			}
-			if pathUnderRoot(absPath, absRoot) {
+			if pathUnderRoot(absPath, r) {
+				absRoot = r
 				allowed = true
 				break
 			}
@@ -105,14 +107,28 @@ func (s *Server) handlePreview() http.HandlerFunc {
 			return
 		}
 
-		ext := strings.ToLower(filepath.Ext(absPath))
+		// Resolve path relative to the allowed root. Open via os.Root so access is scoped to the root (traversal-resistant).
+		rel, err := filepath.Rel(absRoot, absPath)
+		if err != nil || strings.Contains(rel, "..") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		ext := strings.ToLower(filepath.Ext(rel))
 		contentType, ok := previewableExts[ext]
 		if !ok {
 			http.Error(w, "preview not supported for this file type", http.StatusBadRequest)
 			return
 		}
 
-		f, err := os.Open(absPath)
+		root, err := os.OpenRoot(absRoot)
+		if err != nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		defer root.Close()
+
+		f, err := root.Open(rel)
 		if err != nil {
 			if os.IsNotExist(err) {
 				http.Error(w, "not found", http.StatusNotFound)
@@ -131,7 +147,7 @@ func (s *Server) handlePreview() http.HandlerFunc {
 
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Cache-Control", "private, max-age=300")
-		http.ServeContent(w, r, filepath.Base(absPath), info.ModTime(), f)
+		http.ServeContent(w, r, filepath.Base(rel), info.ModTime(), f)
 	}
 }
 
