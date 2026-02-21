@@ -548,6 +548,8 @@ func TestIntegration_7_FileDeletedThenRecreatedWithDifferentData(t *testing.T) {
 	assertGrouping(t, baseURL, 1, 2, sizeCD)
 	assertScanStats(t, baseURL, scan2, 4, 3, 3, 0, 0)
 
+	// Ensure new B gets a different mtime so hash reset (mtime != hashed_mtime) runs; 1s-resolution filesystems in CI.
+	time.Sleep(2 * time.Second)
 	// Recreate B with different content, same size (9 bytes). Must not reuse old hash.
 	contentBNew := []byte("different")
 	if len(contentBNew) != len(contentAB) {
