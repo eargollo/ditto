@@ -2,7 +2,7 @@
 
 Goals: verify end-to-end behavior of scan → hash → duplicate grouping, and that per-scan statistics (hashed, reused, read from disk) match reality. Tests should run against a real DB (Postgres) and a real directory tree (temp dir with controlled files).
 
-**Design principle: duplicates across all folders.** The product has multiple folders (each scanned separately). Duplicate detection is **global**: we find duplicates among all scanned files from all folders, not per folder. A duplicate group can contain files from different folders (e.g. scenario 7: A1, B1 in folder 1 and E2 in folder 2). The hash phase uses a global duplicate-size queue so that when a new scan adds files whose size already exists in another folder, we hash those other-folder files too and form cross-folder groups.
+**Design principle: duplicates across all folders.** The product has multiple folders (each scanned separately). Duplicate detection is **global**: we find duplicates among all scanned files from all folders, not per folder. A duplicate group can contain files from different folders (e.g. scenario 8: A1, B1 in folder 1 and E2 in folder 2). The hash phase uses a global duplicate-size queue so that when a new scan adds files whose size already exists in another folder, we hash those other-folder files too and form cross-folder groups.
 
 For each scenario we validate:
 1. **Grouping** – duplicate groups (by hash), file membership, counts, reclaimable size; summary totals.
@@ -18,8 +18,9 @@ For each scenario we validate:
 | 4. One duplicate changes (diff size, unique) | 1 group (C,D); B hash IS NULL | (unchanged)             | 3 hashed; 3 reused; 0 read; B not hashed |
 | 5. One file becomes duplicate (E→A) | 1 group of 3 (A,B,E), 1 of 2 (C,D)     | (unchanged)             | 5 hashed; 4 reused; 1 read |
 | 6. Delete B, D between scans | 0 groups (no pairs among live files)    | (unchanged)             | 3 scanned; 2 hashed; 2 reused; 0 read (E unique size) |
-| 7. Two folders: scan 1 then 2 | 2 groups (A1,B1,E2) and (C2,D2); cross-folder + within-folder | 2 scanned; 2 hashed; 0 reused; 2 read | 4 scanned; 4 hashed; 0 reused; 4 read |
-| 8. Two folders: first no dup, second match + same-size-diff | 1 group (P1,R2,R2b); scan 1 files hashed when scan 2 runs (global queue); S2 same size as Q1 but different | 2 scanned; 2 hashed; 0 reused; 2 read | 3 scanned; 3 hashed; 0 reused; 3 read |
+| 7. File deleted then recreated (different data, same size) | Undelete + re-hash; (C,D) still 1 group; B re-read | (unchanged)             | Scan 2: 1 group (C,D); 4 scanned, 3 hashed, 3 reused. Scan 3: 1 group (C,D); 5 scanned, 4 hashed, 3 reused, 1 read (B) |
+| 8. Two folders: scan 1 then 2 | 2 groups (A1,B1,E2) and (C2,D2); cross-folder + within-folder | 2 scanned; 2 hashed; 0 reused; 2 read | 4 scanned; 4 hashed; 0 reused; 4 read |
+| 9. Two folders: first no dup, second match + same-size-diff | 1 group (P1,R2,R2b); scan 1 files hashed when scan 2 runs (global queue); S2 same size as Q1 but different | 2 scanned; 2 hashed; 0 reused; 2 read | 3 scanned; 3 hashed; 0 reused; 3 read |
 
 ---
 
@@ -180,6 +181,37 @@ For each scenario we validate:
 
 ---
 
+## 7. File deleted then recreated with different data (same size)
+
+**Goal:** Ensure that when a file is removed (gets `deleted_at`), then recreated with **different content** (same size), the next scan “undeletes” it and **re-hashes** it. Catches bugs where we would wrongly reuse a deleted file’s hash for the new content.
+
+**Setup**
+- After scenario 1: A, B identical; C, D identical; E unique.
+- Delete B from disk. Run second scan so B gets `deleted_at`. Scan 2 has A, C, D, E; (C,D) still one group.
+- Recreate B with **different content**, same size (9 bytes, e.g. `"different"`).
+
+**Actions**
+- Run third scan.
+
+**Assert – grouping**
+- After scan 2: 1 group (C, D), 2 files, reclaimable = sizeCD.
+- After scan 3: still 1 group (C, D). A and B have different hashes (B was re-hashed), so they do not form a group.
+
+**Assert – scan 2 stats**
+- Files scanned: 4. Files with hash: 3 (A, C, D). Reused: 3. Read: 0.
+
+**Assert – scan 3 stats**
+- Files scanned: 5. Files with hash: 4 (A, B, C, D). Reused: 3 (A, C, D). Read from disk: 1 (B – new content, must be re-hashed).
+
+**Assert – undelete and hash reset**
+- B appears in the scan and has a **new** hash (not the old one from when it matched A). B is re-hashed (1 read); A and B are no longer duplicates.
+
+**Related unit tests (internal/db/files_test.go)**
+- `TestUpdateFilesDeletedAtForScan_undelete`: file in scan with `deleted_at` set → after `UpdateFilesDeletedAtForScan`, `deleted_at` is NULL.
+- `TestUpdateFilesDeletedAtForScan_hashResetWhenMtimeDiffers`: file in scan with `mtime != hashed_mtime` → after update, `hash_status = 'pending'`, `hash` / `hashed_at` / `hashed_mtime` cleared.
+
+---
+
 ## Test structure (suggested)
 
 - **Fixture**: helper that creates a temp dir and populates it with named files and given content (so we can control duplicates by content). Helper to run scan + hash for a folder and return scan ID(s) and any errors.
@@ -201,7 +233,7 @@ For each scenario we validate:
 
 ## Two-folder scenarios
 
-### 7. Scan folder 1, then folder 2 – cross-folder and within-folder duplicates
+### 8. Scan folder 1, then folder 2 – cross-folder and within-folder duplicates
 
 **Setup**
 - **Folder 1**: Two files with same content (e.g. A1, B1 both "contentAB", size 9). Scan folder 1 and run hash phase.
@@ -229,7 +261,7 @@ For each scenario we validate:
 
 ---
 
-### 8. Two folders: first scan zero duplicates (different sizes), second has match and same-size-different
+### 9. Two folders: first scan zero duplicates (different sizes), second has match and same-size-different
 
 **Setup**
 - **Folder 1**: Two files with **different sizes** so no size appears twice → no files hashed (e.g. P1 "a" 1 byte, Q1 "bb" 2 bytes). Scan folder 1 and run hash phase.

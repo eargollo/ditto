@@ -166,3 +166,76 @@ func TestUpdateFilesDeletedAtForScan(t *testing.T) {
 		t.Errorf("file c (not in scan) should have deleted_at set, got nil")
 	}
 }
+
+// TestUpdateFilesDeletedAtForScan_undelete ensures a file that had deleted_at set (e.g. was
+// missing in a previous scan) gets deleted_at = NULL when it appears in the current scan.
+func TestUpdateFilesDeletedAtForScan_undelete(t *testing.T) {
+	ctx := context.Background()
+	db := TestPostgresDB(t)
+
+	folderID, _ := AddFolder(ctx, db, "/tmp")
+	scan, _ := CreateScan(ctx, db, folderID)
+	fileIDa, _ := UpsertFile(ctx, db, folderID, "a", 10, 1000, ptrInt64(1), nil)
+	InsertFileScan(ctx, db, fileIDa, scan.ID)
+
+	// Simulate "file was deleted in a previous scan": set deleted_at.
+	if _, err := db.ExecContext(ctx, "UPDATE files SET deleted_at = (NOW() AT TIME ZONE 'UTC') WHERE id = $1", fileIDa); err != nil {
+		t.Fatalf("set deleted_at: %v", err)
+	}
+
+	if err := UpdateScanCompletedAt(ctx, db, scan.ID, 1, 0); err != nil {
+		t.Fatalf("UpdateScanCompletedAt: %v", err)
+	}
+	if err := UpdateFilesDeletedAtForScan(ctx, db, scan.ID, folderID); err != nil {
+		t.Fatalf("UpdateFilesDeletedAtForScan: %v", err)
+	}
+
+	var deletedAt interface{}
+	db.QueryRowContext(ctx, "SELECT deleted_at FROM files WHERE id = $1", fileIDa).Scan(&deletedAt)
+	if deletedAt != nil {
+		t.Errorf("file a (in scan, was deleted) should have deleted_at NULL after update, got %v", deletedAt)
+	}
+}
+
+// TestUpdateFilesDeletedAtForScan_hashResetWhenMtimeDiffers ensures a file in the scan whose
+// mtime differs from hashed_mtime (or never hashed) gets hash_status = 'pending' and hash
+// fields cleared so it is re-hashed.
+func TestUpdateFilesDeletedAtForScan_hashResetWhenMtimeDiffers(t *testing.T) {
+	ctx := context.Background()
+	db := TestPostgresDB(t)
+
+	folderID, _ := AddFolder(ctx, db, "/tmp")
+	scan, _ := CreateScan(ctx, db, folderID)
+	fileIDa, _ := UpsertFile(ctx, db, folderID, "a", 10, 1000, ptrInt64(1), nil)
+	InsertFileScan(ctx, db, fileIDa, scan.ID)
+
+	// Set hash state as if we had hashed the file when mtime was 999; now mtime is 1000 (file changed).
+	if _, err := db.ExecContext(ctx,
+		"UPDATE files SET hash = 'oldhash', hash_status = 'done', hashed_at = (NOW() AT TIME ZONE 'UTC'), hashed_mtime = 999 WHERE id = $1",
+		fileIDa); err != nil {
+		t.Fatalf("set hash state: %v", err)
+	}
+
+	if err := UpdateScanCompletedAt(ctx, db, scan.ID, 1, 0); err != nil {
+		t.Fatalf("UpdateScanCompletedAt: %v", err)
+	}
+	if err := UpdateFilesDeletedAtForScan(ctx, db, scan.ID, folderID); err != nil {
+		t.Fatalf("UpdateFilesDeletedAtForScan: %v", err)
+	}
+
+	var hashStatus string
+	var hash, hashedAt, hashedMtime interface{}
+	db.QueryRowContext(ctx, "SELECT hash_status, hash, hashed_at, hashed_mtime FROM files WHERE id = $1", fileIDa).Scan(&hashStatus, &hash, &hashedAt, &hashedMtime)
+	if hashStatus != "pending" {
+		t.Errorf("file a hash_status = %q, want pending", hashStatus)
+	}
+	if hash != nil {
+		t.Errorf("file a hash should be NULL after mtime change, got %v", hash)
+	}
+	if hashedAt != nil {
+		t.Errorf("file a hashed_at should be NULL after mtime change, got %v", hashedAt)
+	}
+	if hashedMtime != nil {
+		t.Errorf("file a hashed_mtime should be NULL after mtime change, got %v", hashedMtime)
+	}
+}
