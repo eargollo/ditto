@@ -530,7 +530,41 @@ func TestIntegration_6_DeleteFilesBetweenScans(t *testing.T) {
 	assertScanStats(t, baseURL, scan2, 3, 2, 2, 0, 0)
 }
 
-func TestIntegration_7_TwoFolders_CrossFolderAndWithinFolderDuplicates(t *testing.T) {
+// TestIntegration_7_FileDeletedThenRecreatedWithDifferentData ensures that when a file is
+// removed (gets deleted_at), then recreated with different content (same size), the next scan
+// "undeletes" it and re-hashes it instead of reusing the old hash. Catches bugs where we
+// would wrongly reuse a deleted file's hash for the new content.
+func TestIntegration_7_FileDeletedThenRecreatedWithDifferentData(t *testing.T) {
+	ctx := context.Background()
+	baseURL, _ := startService(t)
+	dir, _ := firstScanFixture(t)
+
+	runScanAndHash(ctx, t, baseURL, dir)
+	// Delete B (was duplicate of A). Scan again so B gets deleted_at. Still have A, C, D, E → (C,D) one group.
+	if err := os.Remove(filepath.Join(dir, "B")); err != nil {
+		t.Fatalf("remove B: %v", err)
+	}
+	scan2 := runScanAndHash(ctx, t, baseURL, dir)
+	assertGrouping(t, baseURL, 1, 2, sizeCD)
+	assertScanStats(t, baseURL, scan2, 4, 3, 3, 0, 0)
+
+	// Recreate B with different content, same size (9 bytes). Must not reuse old hash.
+	contentBNew := []byte("different")
+	if len(contentBNew) != len(contentAB) {
+		t.Fatalf("test sanity: B new content size %d != contentAB size %d", len(contentBNew), len(contentAB))
+	}
+	if err := os.WriteFile(filepath.Join(dir, "B"), contentBNew, 0644); err != nil {
+		t.Fatalf("write B: %v", err)
+	}
+	scan3 := runScanAndHash(ctx, t, baseURL, dir)
+	logStats(t, baseURL, scan3)
+
+	// Scan 3: A, B (recreated), C, D, E. 5 files. Duplicate-size: A, B, C, D. B re-read (new content). (C,D) still one group; A and B different hashes.
+	assertGrouping(t, baseURL, 1, 2, sizeCD)
+	assertScanStats(t, baseURL, scan3, 5, 4, 3, 1, 0)
+}
+
+func TestIntegration_8_TwoFolders_CrossFolderAndWithinFolderDuplicates(t *testing.T) {
 	ctx := context.Background()
 	baseURL, _ := startService(t)
 	dir1, dir2 := twoFolderFixture(t)
@@ -545,7 +579,7 @@ func TestIntegration_7_TwoFolders_CrossFolderAndWithinFolderDuplicates(t *testin
 	assertScanStats(t, baseURL, scan2, 4, 4, 0, 4, 0)
 }
 
-func TestIntegration_8_TwoFolders_FirstNoDupSecondMatchAndSameSizeDiff(t *testing.T) {
+func TestIntegration_9_TwoFolders_FirstNoDupSecondMatchAndSameSizeDiff(t *testing.T) {
 	ctx := context.Background()
 	baseURL, _ := startService(t)
 	dir1, dir2 := twoFolderNoDupThenMatchFixture(t)

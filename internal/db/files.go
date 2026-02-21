@@ -146,19 +146,35 @@ func UpdateFilesDeletedAtNotInScan(ctx context.Context, q Querier, scanID, folde
 	return err
 }
 
-// UpdateFilesDeletedAtInScan sets deleted_at = NULL for files in this scan and resets hash fields to pending when mtime changed.
-// Call after UpdateFilesDeletedAtNotInScan. Uses a JOIN so the "in scan" set is computed once.
-func UpdateFilesDeletedAtInScan(ctx context.Context, q Querier, scanID int64) error {
+// UpdateFilesDeletedAtInScanUndelete sets deleted_at = NULL for files in this scan that currently have deleted_at set (reappeared).
+// Call after UpdateFilesDeletedAtNotInScan. Touches only rows that need undelete; typically few or zero after first full scan.
+func UpdateFilesDeletedAtInScanUndelete(ctx context.Context, q Querier, scanID int64) error {
 	_, err := q.ExecContext(ctx,
-		`UPDATE files SET
-			deleted_at = NULL,
-			hash_status = CASE WHEN (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN 'pending' ELSE hash_status END,
-			hash = CASE WHEN (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN NULL ELSE hash END,
-			hashed_at = CASE WHEN (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN NULL ELSE hashed_at END,
-			hashed_mtime = CASE WHEN (mtime IS DISTINCT FROM hashed_mtime OR hashed_mtime IS NULL) THEN NULL ELSE hashed_mtime END
-		 FROM file_scan WHERE files.id = file_scan.file_id AND file_scan.scan_id = $1`,
+		`UPDATE files SET deleted_at = NULL
+		 FROM file_scan WHERE files.id = file_scan.file_id AND file_scan.scan_id = $1 AND files.deleted_at IS NOT NULL`,
 		scanID)
 	return err
+}
+
+// UpdateFilesDeletedAtInScanHashReset sets hash_status = 'pending' and clears hash, hashed_at, hashed_mtime for files in this scan
+// whose mtime differs from hashed_mtime or that were never hashed. Call after UpdateFilesDeletedAtInScanUndelete.
+// Touches only rows that need re-hashing; typically a fraction of the scan on incremental runs.
+func UpdateFilesDeletedAtInScanHashReset(ctx context.Context, q Querier, scanID int64) error {
+	_, err := q.ExecContext(ctx,
+		`UPDATE files SET hash_status = 'pending', hash = NULL, hashed_at = NULL, hashed_mtime = NULL
+		 FROM file_scan WHERE files.id = file_scan.file_id AND file_scan.scan_id = $1
+		 AND (files.mtime IS DISTINCT FROM files.hashed_mtime OR files.hashed_mtime IS NULL)`,
+		scanID)
+	return err
+}
+
+// UpdateFilesDeletedAtInScan runs both undelete and hash-reset for files in this scan. Call after UpdateFilesDeletedAtNotInScan.
+// Prefer calling UpdateFilesDeletedAtInScanUndelete and UpdateFilesDeletedAtInScanHashReset directly for separate timing and fewer rows per query.
+func UpdateFilesDeletedAtInScan(ctx context.Context, q Querier, scanID int64) error {
+	if err := UpdateFilesDeletedAtInScanUndelete(ctx, q, scanID); err != nil {
+		return err
+	}
+	return UpdateFilesDeletedAtInScanHashReset(ctx, q, scanID)
 }
 
 // UpdateFilesDeletedAtForScan updates deleted_at for all files in the given folder: NULL for files in the scan, now() for files not in the scan.
