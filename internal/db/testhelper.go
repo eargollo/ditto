@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+// truncateTestTables clears tables used by tests so each test sees a clean slate within its tx.
+// Call only from TestPostgresDB (inside the same tx); rollback at test end restores prior state.
+func truncateTestTables(ctx context.Context, q Querier) error {
+	_, err := q.ExecContext(ctx, `TRUNCATE TABLE duplicate_groups_hash, file_scan, files, scans, folders RESTART IDENTITY CASCADE`)
+	return err
+}
+
 // DefaultTestDatabaseURL is the default PostgreSQL URL for tests.
 // Uses the ditto_test database so tests and development (make run, which uses ditto) stay separate.
 // Matches docker-compose.dev.yml (postgres service with ditto + ditto_test).
@@ -23,9 +30,10 @@ func TestDatabaseURL() string {
 	return DefaultTestDatabaseURL
 }
 
-// TestPostgresDB opens PostgreSQL (TestDatabaseURL), starts a transaction, and returns a Database (backed by that tx).
-// Schema must already exist (run "make migrate" before tests). Cleanup rolls back the tx
-// and closes the connection, so each test is isolated and tests can run in parallel.
+// TestPostgresDB opens PostgreSQL (TestDatabaseURL), starts a transaction, truncates test tables so the test
+// sees a clean slate, and returns a Database (backed by that tx). Cleanup rolls back the tx and closes the
+// connection, so each test is isolated and tests can run in parallel across packages.
+// Schema must already exist (run "make migrate" before tests).
 // For integration tests use a real *sql.DB and truncate (e.g. internal/integration testDB).
 func TestPostgresDB(t *testing.T) Database {
 	t.Helper()
@@ -40,5 +48,9 @@ func TestPostgresDB(t *testing.T) Database {
 		t.Fatalf("begin tx: %v", err)
 	}
 	t.Cleanup(func() { _ = tx.Rollback() })
+	// Truncate so this test sees empty tables; rollback at end restores prior state.
+	if err := truncateTestTables(context.Background(), tx); err != nil {
+		t.Fatalf("truncate test tables: %v", err)
+	}
 	return &txDB{tx}
 }
