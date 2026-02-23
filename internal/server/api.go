@@ -560,6 +560,8 @@ func (s *Server) apiDuplicatesGroupRefresh() http.HandlerFunc {
 			return
 		}
 		for _, f := range files {
+			// f.Path is from DB: folder.path || '/' || file.path (our scanner), not user input.
+			// #nosec G703 -- path is server-controlled, not from request
 			info, err := os.Stat(f.Path)
 			if err != nil {
 				if os.IsNotExist(err) {
