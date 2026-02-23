@@ -2,8 +2,10 @@ package hash
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -237,6 +239,15 @@ func runHashPhaseProducerConsumer(ctx context.Context, q db.Querier, scanID int6
 				if err != nil {
 					if hashErrorCount != nil {
 						hashErrorCount.Add(1)
+					}
+					// Open failed with "no such file or directory". May be truly gone or a quirk (e.g. Synology
+					// queue file that appears in listing but returns ENOENT on open). Skip so we don't retry
+					// forever; do not set deleted_at so we don't claim the file was deleted. Next full scan
+					// will reset to pending (hashed_mtime IS NULL) and we'll try again.
+					if errors.Is(err, os.ErrNotExist) {
+						_ = db.SetFileHashSkipped(ctx, q, job.ID)
+						progressLog(completed, total, phaseStart, numWorkers)
+						continue
 					}
 					_ = db.ResetFileHashStatusToPending(ctx, q, job.ID)
 					select {

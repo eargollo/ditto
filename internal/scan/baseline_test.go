@@ -95,7 +95,7 @@ func TestBaselineReferenceVsSystem(t *testing.T) {
 		t.Fatalf("ReferenceCSV: %v", err)
 	}
 
-	scanID, err := RunScan(ctx, database, fixtureRoot, nil)
+	scanID, err := RunScan(ctx, database, fixtureRoot, nil, pipelineConfigForTests)
 	if err != nil {
 		t.Fatalf("RunScan: %v", err)
 	}

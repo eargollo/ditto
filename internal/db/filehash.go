@@ -143,3 +143,13 @@ func ResetFileHashStatusToPending(ctx context.Context, q Querier, fileID int64) 
 		fileID)
 	return err
 }
+
+// SetFileHashSkipped sets hash_status = 'skipped' and clears hash/hashed_at/hashed_mtime for the given file.
+// Use when the file could not be read (e.g. open returned ENOENT) but we do not want to mark it deleted.
+// The file will not be retried in this run; on the next full scan, hash reset (hashed_mtime IS NULL) will set it back to 'pending'.
+func SetFileHashSkipped(ctx context.Context, q Querier, fileID int64) error {
+	_, err := q.ExecContext(ctx,
+		"UPDATE files SET hash_status = 'skipped', hash = NULL, hashed_at = NULL, hashed_mtime = NULL WHERE id = $1 AND hash_status = 'hashing'",
+		fileID)
+	return err
+}

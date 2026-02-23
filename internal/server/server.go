@@ -633,7 +633,7 @@ func (s *Server) runOneScan(ctx context.Context, scanID int64) {
 	opts, _ := scan.OptionsForRoot(path)
 	log.Printf("[scan] started for scan %d path %s", scanID, path)
 	if sn.CompletedAt == nil {
-		if err := scan.RunScanForExisting(ctx, s.db, scanID, sn.FolderID, path, opts); err != nil {
+		if err := scan.RunScanForExisting(ctx, s.db, scanID, sn.FolderID, path, opts, nil); err != nil {
 			log.Printf("[scan] failed for scan %d: %v", scanID, err)
 			return
 		}

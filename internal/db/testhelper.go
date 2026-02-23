@@ -2,14 +2,38 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"testing"
 )
 
+const truncateTestTablesSQL = `TRUNCATE TABLE duplicate_groups_hash, file_scan, files, scans, folders RESTART IDENTITY CASCADE`
+
 // truncateTestTables clears tables used by tests so each test sees a clean slate within its tx.
 // Call only from TestPostgresDB (inside the same tx); rollback at test end restores prior state.
 func truncateTestTables(ctx context.Context, q Querier) error {
-	_, err := q.ExecContext(ctx, `TRUNCATE TABLE duplicate_groups_hash, file_scan, files, scans, folders RESTART IDENTITY CASCADE`)
+	_, err := q.ExecContext(ctx, truncateTestTablesSQL)
+	return err
+}
+
+// TestPostgresDBConcurrent opens PostgreSQL (TestDatabaseURL) and returns a *sql.DB so multiple goroutines
+// can use different connections. Use for tests that run concurrent DB access (e.g. scan.RunPipeline).
+// Schema must exist. Call TruncateScanTestTables at test start so the test has a clean slate.
+func TestPostgresDBConcurrent(t *testing.T) *sql.DB {
+	t.Helper()
+	url := TestDatabaseURL()
+	conn, err := OpenPostgres(url)
+	if err != nil {
+		t.Fatalf("open postgres: %v (tests require Postgres; start with: docker compose -f docker-compose.dev.yml up -d; then: make migrate). url: %s", err, url)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+// TruncateScanTestTables truncates the tables used by scan/hash tests so a test starts with a clean DB.
+// Call after TestPostgresDBConcurrent when the test needs isolation (e.g. scan package RunScan tests).
+func TruncateScanTestTables(ctx context.Context, conn *sql.DB) error {
+	_, err := conn.ExecContext(ctx, truncateTestTablesSQL)
 	return err
 }
 

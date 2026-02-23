@@ -19,7 +19,8 @@ type ScanOptions struct {
 
 // RunScan walks rootPath, ensures a folder exists for it, creates a scan, upserts files and ledger rows, then sets the scan's completed_at.
 // Uses the parallel pipeline (multiple walkers, batched DB writers). rootPath must be an existing directory. Returns scanID or error.
-func RunScan(ctx context.Context, q db.Querier, rootPath string, opts *ScanOptions) (int64, error) {
+// pipelineConfig is optional; when nil, config is read from env (e.g. DITTO_SCAN_WRITERS, DITTO_SCAN_PROGRESS_UPDATES).
+func RunScan(ctx context.Context, q db.Querier, rootPath string, opts *ScanOptions, pipelineConfig *PipelineConfig) (int64, error) {
 	rootPath = filepath.Clean(rootPath)
 	info, err := os.Stat(rootPath)
 	if err != nil {
@@ -46,7 +47,7 @@ func RunScan(ctx context.Context, q db.Querier, rootPath string, opts *ScanOptio
 	scanID := s.ID
 
 	log.Printf("[scan] started for scan %d path %s (pipeline)", scanID, rootPath)
-	fileCount, skippedScan, _, err := RunPipeline(ctx, q, scanID, folderID, rootPath, folderPath, opts, nil)
+	fileCount, skippedScan, _, err := RunPipeline(ctx, q, scanID, folderID, rootPath, folderPath, opts, pipelineConfig)
 	if err != nil {
 		return 0, err
 	}
@@ -97,7 +98,8 @@ func RunScan(ctx context.Context, q db.Querier, rootPath string, opts *ScanOptio
 
 // RunScanForExisting walks rootPath and upserts files + ledger for the existing scan (scanID). Use when the scan row was already created.
 // Uses the parallel pipeline (multiple walkers, batched DB writers).
-func RunScanForExisting(ctx context.Context, q db.Querier, scanID int64, folderID int64, rootPath string, opts *ScanOptions) error {
+// pipelineConfig is optional; when nil, config is read from env.
+func RunScanForExisting(ctx context.Context, q db.Querier, scanID int64, folderID int64, rootPath string, opts *ScanOptions, pipelineConfig *PipelineConfig) error {
 	rootPath = filepath.Clean(rootPath)
 	info, err := os.Stat(rootPath)
 	if err != nil {
@@ -112,7 +114,7 @@ func RunScanForExisting(ctx context.Context, q db.Querier, scanID int64, folderI
 	}
 	folderPath := folder.Path
 
-	fileCount, skippedScan, _, err := RunPipeline(ctx, q, scanID, folderID, rootPath, folderPath, opts, nil)
+	fileCount, skippedScan, _, err := RunPipeline(ctx, q, scanID, folderID, rootPath, folderPath, opts, pipelineConfig)
 	if err != nil {
 		return err
 	}
