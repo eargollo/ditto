@@ -111,15 +111,16 @@ func debugPipeline() bool {
 
 // Env names for pipeline tuning (e.g. on Synology NAS). Unset = use default.
 const (
-	EnvScanWalkers   = "DITTO_SCAN_WALKERS"   // number of walker goroutines (default 4)
-	EnvScanWriters   = "DITTO_SCAN_WRITERS"   // number of writer goroutines (default 2)
-	EnvScanBatchSize = "DITTO_SCAN_BATCH_SIZE" // max entries per DB batch (default 500)
+	EnvScanWalkers       = "DITTO_SCAN_WALKERS"        // number of walker goroutines (default 4)
+	EnvScanWriters       = "DITTO_SCAN_WRITERS"        // number of writer goroutines (default 2)
+	EnvScanBatchSize     = "DITTO_SCAN_BATCH_SIZE"     // max entries per DB batch (default 500)
+	EnvScanProgressUpdates = "DITTO_SCAN_PROGRESS_UPDATES" // if "0" or "false", disable live progress writes to DB (default on)
 )
 
 // pipelineConfigFromEnv returns a PipelineConfig from environment variables. Use when config is nil (e.g. from UI).
 // Recommended on Synology: DITTO_SCAN_WALKERS=2 DITTO_SCAN_WRITERS=1 DITTO_SCAN_BATCH_SIZE=250 to reduce CPU/memory.
 func pipelineConfigFromEnv() *PipelineConfig {
-	c := &PipelineConfig{}
+	c := &PipelineConfig{ProgressUpdates: true}
 	if s := os.Getenv(EnvScanWalkers); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 {
 			c.NumWalkers = n
@@ -135,14 +136,27 @@ func pipelineConfigFromEnv() *PipelineConfig {
 			c.BatchSize = n
 		}
 	}
+	if s := os.Getenv(EnvScanProgressUpdates); s == "0" || s == "false" {
+		c.ProgressUpdates = false
+	}
 	return c
 }
 
 // PipelineConfig configures the parallel scan pipeline.
 type PipelineConfig struct {
-	NumWalkers int // number of goroutines that list directories and emit files
-	NumWriters int // number of goroutines that batch and write to DB
-	BatchSize  int // max entries per DB batch (0 = defaultBatchSize)
+	NumWalkers      int  // number of goroutines that list directories and emit files
+	NumWriters      int  // number of goroutines that batch and write to DB
+	BatchSize       int  // max entries per DB batch (0 = defaultBatchSize)
+	ProgressUpdates bool // if true, a goroutine periodically writes file count to DB for UI progress (default true from env)
+}
+
+// progressUpdates returns whether to run the progress-updater goroutine (writes file count to DB for UI).
+// When config is from env, default is true; set ProgressUpdates false to disable (e.g. single connection/tx in tests).
+func (c *PipelineConfig) progressUpdates() bool {
+	if c == nil {
+		return true
+	}
+	return c.ProgressUpdates
 }
 
 func (c *PipelineConfig) numWalkers() int {
@@ -213,8 +227,11 @@ func RunPipeline(ctx context.Context, q db.Querier, scanID, folderID int64, root
 	var wg sync.WaitGroup
 
 	// Progress updater: write current file count to DB periodically so the UI shows live progress.
+	// Controlled by config.ProgressUpdates (default on; set false when using a single connection/tx, e.g. unit tests).
 	progressDone := make(chan struct{})
-	go runProgressUpdater(ctx, q, scanID, metrics, progressDone)
+	if config.progressUpdates() {
+		go runProgressUpdater(ctx, q, scanID, metrics, progressDone)
+	}
 
 	// Debug heartbeat: when DITTO_DEBUG_PIPELINE=1, log metrics every 5s and detect stuck (no change).
 	debugDone := make(chan struct{})

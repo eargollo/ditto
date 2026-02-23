@@ -11,7 +11,10 @@ import (
 	"github.com/eargollo/ditto/internal/db"
 )
 
-func runTestDB(t *testing.T) db.Querier {
+// pipelineConfigForTests uses a single writer and no progress-updater goroutine so a single connection/tx can be used.
+var pipelineConfigForTests = &PipelineConfig{NumWriters: 1, ProgressUpdates: false}
+
+func runTestDB(t *testing.T) db.Database {
 	t.Helper()
 	return db.TestPostgresDB(t)
 }
@@ -28,7 +31,7 @@ func TestRunScan_populatesScanAndFilesWithCompletedAt(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	scanID, err := RunScan(ctx, database, dir, nil)
+	scanID, err := RunScan(ctx, database, dir, nil, pipelineConfigForTests)
 	if err != nil {
 		t.Fatalf("RunScan: %v", err)
 	}
@@ -76,7 +79,7 @@ func TestRunScan_withExcludesReducesFileCount(t *testing.T) {
 	}
 
 	opts := &ScanOptions{ExcludePatterns: []string{"*.log"}}
-	scanID, err := RunScan(ctx, database, dir, opts)
+	scanID, err := RunScan(ctx, database, dir, opts, pipelineConfigForTests)
 	if err != nil {
 		t.Fatalf("RunScan: %v", err)
 	}
@@ -98,7 +101,7 @@ func TestRunScan_nonexistentRootReturnsErrorNoScanRow(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "does-not-exist")
 
-	_, err := RunScan(ctx, database, root, nil)
+	_, err := RunScan(ctx, database, root, nil, pipelineConfigForTests)
 	if err == nil {
 		t.Fatal("RunScan: want error for nonexistent root")
 	}
@@ -123,7 +126,7 @@ func TestRunScan_throttleDisabledIsFast(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, err := RunScan(ctx, database, dir, &ScanOptions{MaxFilesPerSecond: 0})
+	_, err := RunScan(ctx, database, dir, &ScanOptions{MaxFilesPerSecond: 0}, pipelineConfigForTests)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("RunScan: %v", err)
@@ -146,7 +149,7 @@ func TestRunScan_throttleEnabledDelays(t *testing.T) {
 
 	// 10 files/s => 100ms between files. After first file we have 2 waits (before 2nd and 3rd) => at least ~200ms.
 	start := time.Now()
-	_, err := RunScan(ctx, database, dir, &ScanOptions{MaxFilesPerSecond: 10})
+	_, err := RunScan(ctx, database, dir, &ScanOptions{MaxFilesPerSecond: 10}, pipelineConfigForTests)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("RunScan: %v", err)

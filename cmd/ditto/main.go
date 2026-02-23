@@ -165,7 +165,7 @@ func runScan(ctx context.Context, database *sql.DB, rootPath string) {
 	if err != nil {
 		log.Fatalf("exclude file: %v", err)
 	}
-	scanID, err := scan.RunScan(ctx, database, rootPath, opts)
+	scanID, err := scan.RunScan(ctx, database, rootPath, opts, nil)
 	if err != nil {
 		log.Fatalf("scan: %v", err)
 	}
