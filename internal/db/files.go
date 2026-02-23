@@ -146,6 +146,50 @@ func UpdateFilesDeletedAtNotInScan(ctx context.Context, q Querier, scanID, folde
 	return err
 }
 
+// DistinctHashesWithDeletedInFolder returns distinct hashes of files in the folder that have deleted_at set and non-null hash.
+// Call after UpdateFilesDeletedAtNotInScan to get hashes to pass to RefreshDuplicateGroupsForHashes.
+func DistinctHashesWithDeletedInFolder(ctx context.Context, q Querier, folderID int64) ([]string, error) {
+	rows, err := q.QueryContext(ctx,
+		`SELECT DISTINCT hash FROM files WHERE folder_id = $1 AND deleted_at IS NOT NULL AND hash IS NOT NULL`,
+		folderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var hashes []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		hashes = append(hashes, h)
+	}
+	return hashes, rows.Err()
+}
+
+// DistinctHashesInScanHashResetCandidates returns distinct hashes of files in this scan that are about to be hash-reset
+// (mtime != hashed_mtime or hashed_mtime is null). Call before UpdateFilesDeletedAtInScanHashReset; then refresh those hashes after the reset.
+func DistinctHashesInScanHashResetCandidates(ctx context.Context, q Querier, scanID int64) ([]string, error) {
+	rows, err := q.QueryContext(ctx,
+		`SELECT DISTINCT f.hash FROM files f
+		 JOIN file_scan fs ON f.id = fs.file_id AND fs.scan_id = $1
+		 WHERE (f.mtime IS DISTINCT FROM f.hashed_mtime OR f.hashed_mtime IS NULL) AND f.hash IS NOT NULL`,
+		scanID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var hashes []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		hashes = append(hashes, h)
+	}
+	return hashes, rows.Err()
+}
+
 // UpdateFilesDeletedAtInScanUndelete sets deleted_at = NULL for files in this scan that currently have deleted_at set (reappeared).
 // Call after UpdateFilesDeletedAtNotInScan. Touches only rows that need undelete; typically few or zero after first full scan.
 func UpdateFilesDeletedAtInScanUndelete(ctx context.Context, q Querier, scanID int64) error {
@@ -187,6 +231,22 @@ func UpdateFilesDeletedAtForScan(ctx context.Context, q Querier, scanID, folderI
 		return err
 	}
 	return UpdateFilesDeletedAtInScan(ctx, q, scanID)
+}
+
+// SetFileDeletedAt sets deleted_at to now for the given file (e.g. after confirming it no longer exists on disk).
+func SetFileDeletedAt(ctx context.Context, q Querier, fileID int64) error {
+	_, err := q.ExecContext(ctx,
+		`UPDATE files SET deleted_at = (NOW() AT TIME ZONE 'UTC') WHERE id = $1`,
+		fileID)
+	return err
+}
+
+// SetFileHashReset clears hash and sets hash_status = 'pending' for the given file so it will be rehashed (e.g. after detecting mtime/size change).
+func SetFileHashReset(ctx context.Context, q Querier, fileID int64) error {
+	_, err := q.ExecContext(ctx,
+		`UPDATE files SET hash_status = 'pending', hash = NULL, hashed_at = NULL, hashed_mtime = NULL WHERE id = $1`,
+		fileID)
+	return err
 }
 
 // GetFilesByScanID returns all files that appear in the given scan (with full path: folder path || '/' || file path). ScanID is set on each file.

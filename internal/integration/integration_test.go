@@ -165,6 +165,19 @@ type apiSummary struct {
 	ReclaimableSize int64 `json:"reclaimable_size"`
 }
 
+// apiGroupsResponse is the response from GET /api/duplicates/groups.
+type apiGroupsResponse struct {
+	Groups []apiDuplicateGroup `json:"groups"`
+	Total  int64                `json:"total"`
+}
+
+type apiDuplicateGroup struct {
+	Hash            string `json:"hash"`
+	FileCount       int64  `json:"file_count"`
+	TotalSize       int64  `json:"total_size"`
+	ReclaimableSize int64  `json:"reclaimable_size"`
+}
+
 type apiScanStatus struct {
 	ID              int64   `json:"id"`
 	FileCount       *int64  `json:"file_count,omitempty"`
@@ -219,6 +232,46 @@ func assertGrouping(t *testing.T, baseURL string, wantGroupCount, wantTotalFiles
 	}
 	if s.ReclaimableSize != wantReclaimable {
 		t.Errorf("reclaimable size = %d, want %d", s.ReclaimableSize, wantReclaimable)
+	}
+}
+
+// getGroups fetches duplicate groups from the API (limit 50). Used to obtain a group's hash for refresh tests.
+func getGroups(t *testing.T, baseURL string) apiGroupsResponse {
+	t.Helper()
+	resp, err := http.Get(baseURL + "/api/duplicates/groups?limit=50&offset=0")
+	if err != nil {
+		t.Fatalf("GET /api/duplicates/groups: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/duplicates/groups: status = %d", resp.StatusCode)
+	}
+	var r apiGroupsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		t.Fatalf("decode groups: %v", err)
+	}
+	return r
+}
+
+// refreshGroup calls POST /api/duplicates/groups/refresh with the given hash. Fails the test on non-2xx.
+func refreshGroup(t *testing.T, baseURL, hash string) {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"hash": hash})
+	if err != nil {
+		t.Fatalf("marshal refresh body: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/duplicates/groups/refresh", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/duplicates/groups/refresh: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/duplicates/groups/refresh: status = %d, want 200", resp.StatusCode)
 	}
 }
 
@@ -432,6 +485,33 @@ func twoFolderNoDupThenMatchFixture(t *testing.T) (dir1, dir2 string) {
 	return dir1, dir2
 }
 
+// contentTriple: three identical files for "one group, delete one/two then refresh" tests.
+var contentTriple = []byte("triple")
+var sizeTriple = int64(len(contentTriple))
+
+// threeFilesOneGroupFixture creates a dir with three files sharing the same content (one duplicate group of 3).
+func threeFilesOneGroupFixture(t *testing.T) string {
+	t.Helper()
+	return makeFixtureDir(t, map[string][]byte{
+		"A": contentTriple,
+		"B": contentTriple,
+		"C": contentTriple,
+	})
+}
+
+// contentPair: two identical files for "one group, change one then refresh" test.
+var contentPair = []byte("pair!")
+var sizePair = int64(len(contentPair))
+
+// twoFilesOneGroupFixture creates a dir with two files sharing the same content (one duplicate group of 2).
+func twoFilesOneGroupFixture(t *testing.T) string {
+	t.Helper()
+	return makeFixtureDir(t, map[string][]byte{
+		"X": contentPair,
+		"Y": contentPair,
+	})
+}
+
 func TestIntegration_1_FirstScanWithDuplicates(t *testing.T) {
 	ctx := context.Background()
 	baseURL, _ := startService(t)
@@ -595,4 +675,82 @@ func TestIntegration_9_TwoFolders_FirstNoDupSecondMatchAndSameSizeDiff(t *testin
 	assertGrouping(t, baseURL, 1, 3, 2*sizeP)
 	assertScanStats(t, baseURL, scan1, 2, 2, 0, 2, 0)
 	assertScanStats(t, baseURL, scan2, 3, 3, 0, 3, 0)
+}
+
+// TestIntegration_10_GroupRefresh_OneDeleted: group of 3 files, delete one from disk, refresh group → group still exists with 2 files.
+func TestIntegration_10_GroupRefresh_OneDeleted(t *testing.T) {
+	ctx := context.Background()
+	baseURL, _ := startService(t)
+	dir := threeFilesOneGroupFixture(t)
+
+	runScanAndHash(ctx, t, baseURL, dir)
+	// One group of 3 files (total 3*sizeTriple, reclaimable 2*sizeTriple).
+	assertGrouping(t, baseURL, 1, 3, 2*sizeTriple)
+
+	groups := getGroups(t, baseURL)
+	if len(groups.Groups) != 1 || groups.Groups[0].FileCount != 3 {
+		t.Fatalf("expected one group with 3 files, got %d groups", len(groups.Groups))
+	}
+	hash := groups.Groups[0].Hash
+
+	if err := os.Remove(filepath.Join(dir, "B")); err != nil {
+		t.Fatalf("remove B: %v", err)
+	}
+	refreshGroup(t, baseURL, hash)
+
+	// Group still exists with 2 files; reclaimable = one copy = sizeTriple.
+	assertGrouping(t, baseURL, 1, 2, sizeTriple)
+}
+
+// TestIntegration_11_GroupRefresh_OneChanged: group of 2 files, change one file (same size), refresh group → group no longer exists.
+func TestIntegration_11_GroupRefresh_OneChanged(t *testing.T) {
+	ctx := context.Background()
+	baseURL, _ := startService(t)
+	dir := twoFilesOneGroupFixture(t)
+
+	runScanAndHash(ctx, t, baseURL, dir)
+	assertGrouping(t, baseURL, 1, 2, sizePair)
+
+	groups := getGroups(t, baseURL)
+	if len(groups.Groups) != 1 || groups.Groups[0].FileCount != 2 {
+		t.Fatalf("expected one group with 2 files, got %d groups", len(groups.Groups))
+	}
+	hash := groups.Groups[0].Hash
+
+	// Change X content (same size) so mtime/size check will flag it for rehash; refresh marks it pending so group disappears.
+	time.Sleep(2 * time.Second)
+	if err := os.WriteFile(filepath.Join(dir, "X"), []byte("diff!"), 0644); err != nil {
+		t.Fatalf("write X: %v", err)
+	}
+	refreshGroup(t, baseURL, hash)
+
+	// Only one file still has that hash → no duplicate group.
+	assertGrouping(t, baseURL, 0, 0, 0)
+}
+
+// TestIntegration_12_GroupRefresh_TwoDeleted: group of 3 files, delete two from disk, refresh group → group no longer exists.
+func TestIntegration_12_GroupRefresh_TwoDeleted(t *testing.T) {
+	ctx := context.Background()
+	baseURL, _ := startService(t)
+	dir := threeFilesOneGroupFixture(t)
+
+	runScanAndHash(ctx, t, baseURL, dir)
+	assertGrouping(t, baseURL, 1, 3, 2*sizeTriple)
+
+	groups := getGroups(t, baseURL)
+	if len(groups.Groups) != 1 || groups.Groups[0].FileCount != 3 {
+		t.Fatalf("expected one group with 3 files, got %d groups", len(groups.Groups))
+	}
+	hash := groups.Groups[0].Hash
+
+	if err := os.Remove(filepath.Join(dir, "B")); err != nil {
+		t.Fatalf("remove B: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "C")); err != nil {
+		t.Fatalf("remove C: %v", err)
+	}
+	refreshGroup(t, baseURL, hash)
+
+	// Only one file left → no duplicate group.
+	assertGrouping(t, baseURL, 0, 0, 0)
 }

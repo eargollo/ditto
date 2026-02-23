@@ -63,6 +63,10 @@ func RunScan(ctx context.Context, q db.Querier, rootPath string, opts *ScanOptio
 		return 0, err
 	}
 	log.Printf("[scan] deleted_at update (not in scan) for scan %d took %d ms", scanID, time.Since(t1).Milliseconds())
+	// Refresh duplicate_groups_hash for hashes of files we just marked deleted.
+	if affected, _ := db.DistinctHashesWithDeletedInFolder(ctx, q, folderID); len(affected) > 0 {
+		_ = db.RefreshDuplicateGroupsForHashes(ctx, q, affected)
+	}
 
 	log.Printf("[scan] starting deleted_at update (in scan, undelete) for scan %d", scanID)
 	t2 := time.Now()
@@ -74,11 +78,16 @@ func RunScan(ctx context.Context, q db.Querier, rootPath string, opts *ScanOptio
 
 	log.Printf("[scan] starting deleted_at update (in scan, hash reset) for scan %d", scanID)
 	t3 := time.Now()
+	// Get hashes we're about to clear so we can refresh duplicate_groups_hash after the reset.
+	hashResetHashes, _ := db.DistinctHashesInScanHashResetCandidates(ctx, q, scanID)
 	if err := db.UpdateFilesDeletedAtInScanHashReset(ctx, q, scanID); err != nil {
 		log.Printf("[scan] deleted_at update (in scan, hash reset) failed for scan %d: %v", scanID, err)
 		return 0, err
 	}
 	log.Printf("[scan] deleted_at update (in scan, hash reset) for scan %d took %d ms", scanID, time.Since(t3).Milliseconds())
+	if len(hashResetHashes) > 0 {
+		_ = db.RefreshDuplicateGroupsForHashes(ctx, q, hashResetHashes)
+	}
 
 	d := time.Since(deletedAtStart).Milliseconds()
 	_ = db.UpdateScanDeletedAtUpdateDuration(ctx, q, scanID, d)
@@ -120,6 +129,9 @@ func RunScanForExisting(ctx context.Context, q db.Querier, scanID int64, folderI
 		return err
 	}
 	log.Printf("[scan] deleted_at update (not in scan) for scan %d took %d ms", scanID, time.Since(t1).Milliseconds())
+	if affected, _ := db.DistinctHashesWithDeletedInFolder(ctx, q, folderID); len(affected) > 0 {
+		_ = db.RefreshDuplicateGroupsForHashes(ctx, q, affected)
+	}
 
 	log.Printf("[scan] starting deleted_at update (in scan, undelete) for scan %d", scanID)
 	t2 := time.Now()
@@ -131,11 +143,15 @@ func RunScanForExisting(ctx context.Context, q db.Querier, scanID int64, folderI
 
 	log.Printf("[scan] starting deleted_at update (in scan, hash reset) for scan %d", scanID)
 	t3 := time.Now()
+	hashResetHashes, _ := db.DistinctHashesInScanHashResetCandidates(ctx, q, scanID)
 	if err := db.UpdateFilesDeletedAtInScanHashReset(ctx, q, scanID); err != nil {
 		log.Printf("[scan] deleted_at update (in scan, hash reset) failed for scan %d: %v", scanID, err)
 		return err
 	}
 	log.Printf("[scan] deleted_at update (in scan, hash reset) for scan %d took %d ms", scanID, time.Since(t3).Milliseconds())
+	if len(hashResetHashes) > 0 {
+		_ = db.RefreshDuplicateGroupsForHashes(ctx, q, hashResetHashes)
+	}
 
 	d := time.Since(deletedAtStart).Milliseconds()
 	_ = db.UpdateScanDeletedAtUpdateDuration(ctx, q, scanID, d)

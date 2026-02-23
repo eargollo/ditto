@@ -215,6 +215,40 @@ func FilesInHashGroup(ctx context.Context, q Querier, scanID int64, hash string)
 	return filesInHashGroup(ctx, q, scanID, hash, 0)
 }
 
+// FileForGroupRefresh is a file row used when refreshing a duplicate group (check existence and mtime).
+type FileForGroupRefresh struct {
+	ID          int64
+	Path        string  // full path (folder path + / + file path)
+	Size        int64
+	HashedMtime *int64  // mtime at hash time; nil if never stored
+}
+
+// FilesForGroupRefresh returns all files with the given hash and deleted_at IS NULL, with path/size/hashed_mtime for refresh.
+func FilesForGroupRefresh(ctx context.Context, q Querier, hash string) ([]FileForGroupRefresh, error) {
+	rows, err := q.QueryContext(ctx,
+		`SELECT f.id, (fo.path || '/' || f.path), f.size, f.hashed_mtime
+		  FROM files f JOIN folders fo ON f.folder_id = fo.id
+		  WHERE f.hash = $1 AND f.hash_status = 'done' AND f.deleted_at IS NULL ORDER BY f.path`,
+		hash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FileForGroupRefresh
+	for rows.Next() {
+		var r FileForGroupRefresh
+		var hashedMtime sql.NullInt64
+		if err := rows.Scan(&r.ID, &r.Path, &r.Size, &hashedMtime); err != nil {
+			return nil, err
+		}
+		if hashedMtime.Valid {
+			r.HashedMtime = &hashedMtime.Int64
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // FilesInHashGroupByHash returns all files (across folders) with the given hash and deleted_at IS NULL. No file_scan join.
 // limit 0 means no limit.
 func FilesInHashGroupByHash(ctx context.Context, q Querier, hash string, limit int) ([]File, error) {

@@ -130,3 +130,30 @@ a:hover { text-decoration: underline; }
 .min-w-0 { min-width: 0; }
 .hover\:border-gray-300:hover { border-color: #d1d5db; }
 .hover\:shadow:hover { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1); }
+
+/* Per-group refresh button: blue background, visible arrow-path icon */
+.group-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  padding: 0.375rem 0.5rem;
+  background-color: #dbeafe;
+  color: #1d4ed8;
+  border: 1px solid #93c5fd;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+.group-refresh:hover {
+  background-color: #bfdbfe;
+  color: #1e40af;
+}
+.group-refresh:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.group-refresh svg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}

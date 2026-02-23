@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -505,6 +506,90 @@ func (s *Server) apiDuplicatesGroups() http.HandlerFunc {
 			apiGroups[i] = ag
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"groups": apiGroups, "total": total})
+	}
+}
+
+func (s *Server) apiAdminRefreshDuplicateGroups() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		ctx := r.Context()
+		var err error
+		if dbConn, ok := s.db.(*sql.DB); ok {
+			err = db.PrecomputeDuplicateGroupsHashInTransaction(ctx, dbConn)
+		} else {
+			err = db.PrecomputeDuplicateGroupsHash(ctx, s.db)
+		}
+		if err != nil {
+			log.Printf("api admin refresh duplicate groups: %v", err)
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+
+// apiPostGroupRefreshRequest is the body for POST /api/duplicates/groups/refresh.
+type apiPostGroupRefreshRequest struct {
+	Hash string `json:"hash"`
+}
+
+func (s *Server) apiDuplicatesGroupRefresh() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body apiPostGroupRefreshRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+		hash := trimSpace(body.Hash)
+		if hash == "" {
+			writeAPIError(w, http.StatusBadRequest, "hash required")
+			return
+		}
+		ctx := r.Context()
+		files, err := db.FilesForGroupRefresh(ctx, s.db, hash)
+		if err != nil {
+			log.Printf("api duplicates group refresh: list files: %v", err)
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, f := range files {
+			// f.Path is from DB: folder.path || '/' || file.path (our scanner), not user input.
+			// #nosec G703 -- path is server-controlled, not from request
+			info, err := os.Stat(f.Path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					if err := db.SetFileDeletedAt(ctx, s.db, f.ID); err != nil {
+						log.Printf("api duplicates group refresh: set deleted_at for file %d: %v", f.ID, err)
+					}
+				}
+				continue
+			}
+			if !info.Mode().IsRegular() {
+				continue
+			}
+			needReset := info.Size() != f.Size
+			if !needReset && f.HashedMtime != nil {
+				needReset = info.ModTime().Unix() != *f.HashedMtime
+			}
+			if needReset {
+				if err := db.SetFileHashReset(ctx, s.db, f.ID); err != nil {
+					log.Printf("api duplicates group refresh: set hash reset for file %d: %v", f.ID, err)
+				}
+			}
+		}
+		if err := db.RefreshDuplicateGroupsForHashes(ctx, s.db, []string{hash}); err != nil {
+			log.Printf("api duplicates group refresh: refresh hashes: %v", err)
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
 }
 

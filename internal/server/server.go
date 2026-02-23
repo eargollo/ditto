@@ -124,6 +124,7 @@ func formatIntWithCommas(n int64) string {
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /{$}", s.handleHome())
 	s.mux.HandleFunc("GET /scans", s.handleScans())
+	s.mux.HandleFunc("GET /admin", s.handleAdmin())
 	s.mux.HandleFunc("GET /scans/roots", s.handleScanRootsList())
 	s.mux.HandleFunc("POST /scans/roots", s.handleScanRootsAdd())
 	s.mux.HandleFunc("POST /scans/start", s.handleScansStart())
@@ -148,6 +149,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/scans/{id}/status", s.apiScansStatus())
 	s.mux.HandleFunc("GET /api/duplicates/summary", s.apiDuplicatesSummary())
 	s.mux.HandleFunc("GET /api/duplicates/groups", s.apiDuplicatesGroups())
+	s.mux.HandleFunc("POST /api/admin/refresh-duplicate-groups", s.apiAdminRefreshDuplicateGroups())
+	s.mux.HandleFunc("POST /api/duplicates/groups/refresh", s.apiDuplicatesGroupRefresh())
 
 	staticRoot, _ := fs.Sub(staticFS, "static")
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticRoot))))
@@ -219,6 +222,12 @@ func (s *Server) handleHome() http.HandlerFunc {
 }
 
 func (s *Server) handleScans() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.renderPage(w, "layout.html", "shell-content", &shellData{})
+	}
+}
+
+func (s *Server) handleAdmin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.renderPage(w, "layout.html", "shell-content", &shellData{})
 	}
