@@ -34,11 +34,12 @@ All API routes live under `/api/`. JSON request/response; standard HTTP methods 
 
 ### 1.4 Duplicates (precomputed global view — home page)
 
-| Method | Path | Description | Response |
-|--------|------|-------------|----------|
-| GET | `/api/duplicates/summary` | Global summary (group count, total files, reclaimable) | `200` `{ "group_count", "total_files", "total_size", "reclaimable_size" }` |
-| GET | `/api/duplicates/groups` | Paginated duplicate-by-hash groups **with files embedded** | `?limit=20&offset=0&max_files_per_group=10` → `200` `{ "groups": [...], "total": N }` each group: `{ "hash", "file_count", "total_size", "reclaimable_size", "files": [{ "id", "path", "size", ... }] }`. Embedding files avoids n+1; `max_files_per_group` caps list size (default e.g. 10); truncated groups can use drill-down. |
-| GET | `/api/duplicates/groups/{hash}/files` | Full file list for one group (drill-down when embedded list was truncated) | `200` `[{ "id", "path", "size", "folder_id", ... }]` or `404` |
+| Method | Path | Description | Request | Response |
+|--------|------|-------------|---------|----------|
+| GET | `/api/duplicates/summary` | Global summary (group count, total files, reclaimable) | — | `200` `{ "group_count", "total_files", "total_size", "reclaimable_size" }` |
+| GET | `/api/duplicates/groups` | Paginated duplicate-by-hash groups **with files embedded** | `?limit=20&offset=0&max_files_per_group=10` | `200` `{ "groups": [...], "total": N }` each group: `{ "hash", "file_count", "total_size", "reclaimable_size", "files": [{ "id", "path", "size", ... }] }`. Embedding files avoids n+1; `max_files_per_group` caps list size (default 10); truncated groups can use drill-down. |
+| POST | `/api/duplicates/groups/refresh` | Refresh **one** duplicate group: check each file on disk; mark missing as deleted, flag changed files for rehash; update group row (or remove if no duplicates left). | `{ "hash": "<content-hash>" }` | `200` `{ "status": "ok" }` or `4xx`/`5xx` `{ "error": "..." }` |
+| GET | `/api/duplicates/groups/{hash}/files` | Full file list for one group (drill-down when embedded list was truncated) | — | `200` `[{ "id", "path", "size", "folder_id", ... }]` or `404` *(optional; not yet implemented)* |
 
 ### 1.5 Scan export
 
@@ -46,13 +47,19 @@ All API routes live under `/api/`. JSON request/response; standard HTTP methods 
 |--------|------|-------------|----------|
 | GET | `/api/scans/{id}/export` | Export scan files as CSV (path, hash, size) | `200` CSV body, `Content-Disposition: attachment` (or `404` if scan not found) |
 
-### 1.6 Health
+### 1.6 Admin
+
+| Method | Path | Description | Request | Response |
+|--------|------|-------------|---------|----------|
+| POST | `/api/admin/refresh-duplicate-groups` | Rebuild the entire duplicate groups table (TRUNCATE + INSERT from all hashed files). Use after data restore or if the list looks wrong. Normal flow uses incremental updates. | — | `200` `{ "status": "ok" }` or `5xx` `{ "error": "..." }` |
+
+### 1.7 Health
 
 | Method | Path | Response |
 |--------|------|----------|
 | GET | `/api/health` or keep `/health` | `200` `ok` / `503` + body |
 
-### 1.7 Conventions
+### 1.8 Conventions
 
 - **Errors:** `4xx`/`5xx` with body e.g. `{ "error": "message" }` (or `{ "code": "...", "message": "..." }`).
 - **Timestamps:** RFC3339 in JSON.

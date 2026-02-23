@@ -114,13 +114,19 @@
                   '</div>';
               }
             }
+            var arrowPathSvg =
+              '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>';
+            var refreshBtn =
+              '<button type="button" class="group-refresh" title="Refresh group: check files on disk, mark missing as deleted, flag changed for rehash" data-hash="' + escapeHtml(g.hash) + '">' + arrowPathSvg + '</button>';
             return (
-              '<section class="border border-gray-200 rounded-lg bg-white overflow-hidden shadow-sm flex flex-col sm:flex-row">' +
+              '<section class="border border-gray-200 rounded-lg bg-white overflow-hidden shadow-sm flex flex-col sm:flex-row" data-group-hash="' + escapeHtml(g.hash) + '">' +
               '<div class="flex-1 min-w-0 border-b border-gray-200 sm:border-b-0 sm:border-r border-gray-200">' +
               '<header class="px-4 py-4">' +
+              '<div class="flex items-center justify-between gap-2 flex-wrap">' +
               '<p class="text-lg font-semibold text-gray-900">' +
               g.file_count + ' file' + (g.file_count !== 1 ? 's' : '') +
               ' <span class="text-gray-500 font-normal text-base">· ' + formatBytes(perFile) + ' each</span></p>' +
+              refreshBtn + '</div>' +
               '<p class="text-sm text-gray-500 mt-0.5">Group total: ' + formatBytes(g.total_size) + '</p>' +
               '</header>' +
               '<div class="px-4 py-3"><div class="space-y-1">' +
@@ -173,9 +179,39 @@
     ])
       .then(function (results) {
         content.innerHTML = renderHome(results[0], results[1]);
+        if (!content._groupRefreshBound) {
+          content._groupRefreshBound = true;
+          content.addEventListener('click', onContentClick);
+        }
       })
       .catch(function (err) {
         content.innerHTML = '<p class="text-red-600">Failed to load: ' + escapeHtml(err.message) + '</p>';
+      });
+  }
+
+  function onContentClick(ev) {
+    var btn = ev.target && ev.target.closest && ev.target.closest('.group-refresh');
+    if (!btn || !btn.dataset || !btn.dataset.hash) return;
+    ev.preventDefault();
+    var hash = btn.dataset.hash;
+    var section = btn.closest('section[data-group-hash]');
+    btn.disabled = true;
+    fetch('/api/duplicates/groups/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ hash: hash }),
+    })
+      .then(function (r) {
+        if (!r.ok) return r.json().then(function (body) { throw new Error(body.error || r.statusText); });
+        return r.json();
+      })
+      .then(function () {
+        if (section) section.classList.add('opacity-75');
+        loadHome();
+      })
+      .catch(function (err) {
+        btn.disabled = false;
+        btn.title = 'Error: ' + err.message;
       });
   }
 
@@ -398,6 +434,54 @@
       });
   }
 
+  // --- Admin (/admin) ---
+  function renderAdmin() {
+    return (
+      '<h1 class="text-2xl font-bold text-gray-900">Admin</h1>' +
+      '<p class="mt-1 text-gray-600">Maintenance and repair actions.</p>' +
+      '<section class="mt-6 rounded-lg border border-gray-200 bg-white p-6 shadow-sm">' +
+      '<h2 class="text-lg font-semibold text-gray-800">Duplicate groups</h2>' +
+      '<p class="mt-1 text-gray-600">Rebuild the duplicate groups table from all hashed files. Use if the list looks wrong or after restoring data.</p>' +
+      '<button type="button" id="admin-refresh-groups" class="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">Refresh all groups<svg class="w-4 h-4 shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg></button>' +
+      '<span id="admin-refresh-status" class="ml-3 text-sm text-gray-500"></span>' +
+      '</section>'
+    );
+  }
+
+  function loadAdmin() {
+    var content = getContent();
+    if (!content) return;
+    content.innerHTML = renderAdmin();
+    var btn = document.getElementById('admin-refresh-groups');
+    var statusEl = document.getElementById('admin-refresh-status');
+    if (btn && statusEl) {
+      btn.addEventListener('click', function () {
+        btn.disabled = true;
+        statusEl.textContent = 'Refreshing…';
+        statusEl.classList.remove('text-red-600', 'text-green-600');
+        statusEl.classList.add('text-gray-500');
+        fetch('/api/admin/refresh-duplicate-groups', { method: 'POST', headers: { Accept: 'application/json' } })
+          .then(function (r) {
+            if (!r.ok) return r.json().then(function (body) { throw new Error(body.error || r.statusText); });
+            return r.json();
+          })
+          .then(function () {
+            statusEl.textContent = 'Done.';
+            statusEl.classList.remove('text-gray-500');
+            statusEl.classList.add('text-green-600');
+          })
+          .catch(function (err) {
+            statusEl.textContent = 'Failed: ' + err.message;
+            statusEl.classList.remove('text-gray-500');
+            statusEl.classList.add('text-red-600');
+          })
+          .finally(function () {
+            btn.disabled = false;
+          });
+      });
+    }
+  }
+
   // --- Router ---
   function run() {
     var content = getContent();
@@ -410,6 +494,10 @@
     }
     if (path === '/scans') {
       loadScans();
+      return;
+    }
+    if (path === '/admin') {
+      loadAdmin();
       return;
     }
     var scanMatch = /^\/scans\/(\d+)$/.exec(path);

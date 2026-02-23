@@ -103,9 +103,7 @@ func RunHashPhase(ctx context.Context, q db.Querier, scanID int64, opts *HashOpt
 		}
 		_ = db.UpdateScanHashStats(ctx, q, sid, c, b, 0, 0)
 	}
-	if err := db.PrecomputeDuplicateGroupsHash(ctx, q); err != nil {
-		log.Printf("[hash] precompute duplicate groups failed: %v", err)
-	}
+	// Duplicate groups are updated incrementally after each hash batch.
 	return nil
 }
 
@@ -169,6 +167,7 @@ func runHashPhaseProducerConsumer(ctx context.Context, q db.Querier, scanID int6
 	}()
 
 	// Batch writer: collect hash updates and flush in batches to reduce DB round-trips (e.g. on NAS).
+	// After each successful flush, refresh duplicate_groups_hash for the affected hashes incrementally.
 	var writerWg sync.WaitGroup
 	writerWg.Add(1)
 	go func() {
@@ -187,6 +186,18 @@ func runHashPhaseProducerConsumer(ctx context.Context, q db.Querier, scanID int6
 				return
 			}
 			logSlowIf("UpdateFileHashBatch", t0)
+			// Incremental refresh: update duplicate_groups_hash for hashes we just wrote.
+			hashes := make([]string, 0, len(batch))
+			for i := range batch {
+				hashes = append(hashes, batch[i].Hash)
+			}
+			if err := db.RefreshDuplicateGroupsForHashes(ctx, q, hashes); err != nil {
+				log.Printf("[hash] refresh duplicate groups for batch failed: %v", err)
+				select {
+				case errCh <- err:
+				default:
+				}
+			}
 			batch = nil
 		}
 		for {
