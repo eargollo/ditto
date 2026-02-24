@@ -1,0 +1,13 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <circle cx="100" cy="100" r="100" fill="#2E3440"/>
+  
+  <!-- Top File (Solid) -->
+  <rect x="60" y="40" width="80" height="55" rx="6" fill="#FFFFFF"/>
+  
+  <!-- Reflection Line -->
+  <line x1="50" y1="100" x2="150" y2="100" stroke="#FF6B35" stroke-width="4" stroke-linecap="round"/>
+  
+  <!-- Bottom File (Reflection/Duplicate) -->
+  <rect x="60" y="105" width="80" height="55" rx="6" fill="#FFFFFF" opacity="0.4"/>
+</svg>

@@ -604,6 +604,24 @@ type apiPostDeleteFileRequest struct {
 	FileID int64 `json:"file_id"`
 }
 
+// writeStreamError sends a plain-text error line for streaming delete (stream=1). No flush needed.
+func writeStreamError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(status)
+	// Single line so client can parse; newlines in msg replaced with space.
+	_, err := w.Write([]byte("ERROR: " + strings.ReplaceAll(msg, "\n", " ") + "\n")) // #nosec G705 -- response is text/plain; msg is server error
+	if err != nil {
+		log.Printf("api writeStreamError: write failed: %v", err)
+	}
+}
+
+func abbrevHash(h string) string {
+	if len(h) <= 7 {
+		return h
+	}
+	return h[:7]
+}
+
 func (s *Server) apiDuplicatesFileDelete() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -623,22 +641,35 @@ func (s *Server) apiDuplicatesFileDelete() http.HandlerFunc {
 		}
 		log.Printf("api delete file: attempt file_id=%d", fileID)
 		ctx := r.Context()
+		stream := r.URL.Query().Get("stream") == "1"
 
 		// Load file from DB only; never use client-supplied path/hash.
 		file, err := db.GetFileByID(ctx, s.db, fileID)
 		if err != nil {
 			log.Printf("api delete file: file_id=%d GetFileByID error: %v", fileID, err)
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			if stream {
+				writeStreamError(w, http.StatusInternalServerError, err.Error())
+			} else {
+				writeAPIError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		if file == nil {
 			log.Printf("api delete file: file_id=%d rejected: file not found or already deleted", fileID)
-			writeAPIError(w, http.StatusBadRequest, "file not found or already deleted")
+			if stream {
+				writeStreamError(w, http.StatusBadRequest, "file not found or already deleted")
+			} else {
+				writeAPIError(w, http.StatusBadRequest, "file not found or already deleted")
+			}
 			return
 		}
 		if file.Hash == nil || *file.Hash == "" {
 			log.Printf("api delete file: file_id=%d rejected: file has no hash", fileID)
-			writeAPIError(w, http.StatusBadRequest, "file has no hash; cannot delete")
+			if stream {
+				writeStreamError(w, http.StatusBadRequest, "file has no hash; cannot delete")
+			} else {
+				writeAPIError(w, http.StatusBadRequest, "file has no hash; cannot delete")
+			}
 			return
 		}
 		groupHash := *file.Hash
@@ -647,7 +678,11 @@ func (s *Server) apiDuplicatesFileDelete() http.HandlerFunc {
 		refreshFiles, err := db.FilesForGroupRefresh(ctx, s.db, groupHash)
 		if err != nil {
 			log.Printf("api delete file: FilesForGroupRefresh: %v", err)
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			if stream {
+				writeStreamError(w, http.StatusInternalServerError, err.Error())
+			} else {
+				writeAPIError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		validCount := 0
@@ -666,8 +701,13 @@ func (s *Server) apiDuplicatesFileDelete() http.HandlerFunc {
 			validCount++
 		}
 		if validCount <= 1 {
+			msg := "cannot delete: at least one file must remain in the group (some files may be missing or changed; try refreshing the group)"
 			log.Printf("api delete file: file_id=%d rejected: at least one file must remain in group (valid count=%d)", fileID, validCount)
-			writeAPIError(w, http.StatusBadRequest, "cannot delete: at least one file must remain in the group (some files may be missing or changed; try refreshing the group)")
+			if stream {
+				writeStreamError(w, http.StatusBadRequest, msg)
+			} else {
+				writeAPIError(w, http.StatusBadRequest, msg)
+			}
 			return
 		}
 
@@ -675,7 +715,11 @@ func (s *Server) apiDuplicatesFileDelete() http.HandlerFunc {
 		groupFiles, err := db.FilesInHashGroupByHash(ctx, s.db, groupHash, 0)
 		if err != nil {
 			log.Printf("api delete file: FilesInHashGroupByHash: %v", err)
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			if stream {
+				writeStreamError(w, http.StatusInternalServerError, err.Error())
+			} else {
+				writeAPIError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		var other *db.File
@@ -687,66 +731,108 @@ func (s *Server) apiDuplicatesFileDelete() http.HandlerFunc {
 		}
 		if other == nil || other.Hash == nil {
 			log.Printf("api delete file: file_id=%d rejected: no other file in group to verify", fileID)
-			writeAPIError(w, http.StatusBadRequest, "no other file in group to verify")
+			if stream {
+				writeStreamError(w, http.StatusBadRequest, "no other file in group to verify")
+			} else {
+				writeAPIError(w, http.StatusBadRequest, "no other file in group to verify")
+			}
 			return
 		}
+
+		// Optional stream writer: when stream=1, write progress lines and flush after each.
+		// Lines are server-constructed from DB paths; response is text/plain (G705).
+		var writeLine func(string)
+		if stream {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			fl, _ := w.(http.Flusher)
+			writeLine = func(line string) {
+				if _, err := w.Write([]byte(line + "\n")); err != nil { // #nosec G705 -- response is text/plain; line is server-constructed from DB
+					log.Printf("api delete file: stream write failed: %v", err)
+					return
+				}
+				if fl != nil {
+					fl.Flush()
+				}
+			}
+		} else {
+			writeLine = func(string) {}
+		}
+
+		writeLine("Starting file check")
+
+		writeLine("Hashing file " + file.Path)
 		computedToDelete, err := hash.HashFile(file.Path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				log.Printf("api delete file: file_id=%d rejected: file not found on disk path=%s", fileID, file.Path)
-				writeAPIError(w, http.StatusBadRequest, "file not found on disk")
+				writeLine("ERROR: file not found on disk")
 				return
 			}
 			log.Printf("api delete file: file_id=%d hash error: %v", fileID, err)
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			writeLine("ERROR: " + err.Error())
 			return
 		}
 		if computedToDelete != *file.Hash {
 			log.Printf("api delete file: file_id=%d rejected: file content has changed", fileID)
-			writeAPIError(w, http.StatusBadRequest, "file content has changed; refresh the group and try again")
+			writeLine("ERROR: file content has changed; refresh the group and try again")
 			return
 		}
+		writeLine("File " + file.Path + " hashed. Hash value " + abbrevHash(computedToDelete))
+
+		writeLine("Hashing file " + other.Path)
 		computedOther, err := hash.HashFile(other.Path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				log.Printf("api delete file: file_id=%d rejected: other file in group missing on disk", fileID)
-				writeAPIError(w, http.StatusBadRequest, "another file in the group is missing on disk; refresh the group and try again")
+				writeLine("ERROR: another file in the group is missing on disk; refresh the group and try again")
 				return
 			}
 			log.Printf("api delete file: file_id=%d hash other error: %v", fileID, err)
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			writeLine("ERROR: " + err.Error())
 			return
 		}
 		if computedOther != *other.Hash {
 			log.Printf("api delete file: file_id=%d rejected: file or group content has changed", fileID)
-			writeAPIError(w, http.StatusBadRequest, "file or group content has changed; refresh the group and try again")
+			writeLine("ERROR: file or group content has changed; refresh the group and try again")
 			return
 		}
+		writeLine("File " + other.Path + " hashed. Hash value " + abbrevHash(computedOther))
 
-		// Delete from disk (path from DB only).
+		writeLine("Deleting file " + file.Path)
 		// #nosec G304 G703 -- path from DB only
 		if err := os.Remove(file.Path); err != nil {
 			if os.IsNotExist(err) {
-				// File already gone; still mark as deleted in DB so UI is consistent.
 				log.Printf("api delete file: file_id=%d path=%s: file already missing on disk, marking deleted in DB", fileID, file.Path)
 			} else {
 				log.Printf("api delete file: file_id=%d os.Remove failed: %v", fileID, err)
-				writeAPIError(w, http.StatusInternalServerError, err.Error())
+				writeLine("ERROR: " + err.Error())
 				return
 			}
 		}
+		writeLine("File " + file.Path + " deleted")
+
+		writeLine("Updating database (marking file as deleted)")
 		if err := db.SetFileDeletedAt(ctx, s.db, fileID); err != nil {
 			log.Printf("api delete file: file_id=%d SetFileDeletedAt: %v", fileID, err)
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			writeLine("ERROR: " + err.Error())
 			return
 		}
+		writeLine("Database updated")
+
+		writeLine("Refreshing duplicate group")
 		if err := runGroupRefreshForHash(ctx, s.db, groupHash); err != nil {
 			log.Printf("api delete file: file_id=%d runGroupRefreshForHash: %v", fileID, err)
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			writeLine("ERROR: " + err.Error())
 			return
 		}
+		writeLine("Group refreshed")
+
 		log.Printf("api delete file: deleted file_id=%d path=%s", fileID, file.Path)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeLine("DONE")
+		if !stream {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		}
 	}
 }
 
