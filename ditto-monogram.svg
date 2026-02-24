@@ -1,0 +1,19 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="200" height="200" rx="40" fill="#00B8A9"/>
+  
+  <!-- The Ditto Symbol " stylized as binary or data blocks -->
+  <g fill="#FFFFFF">
+    <!-- Top Pair -->
+    <rect x="50" y="60" width="35" height="35" rx="8"/>
+    <rect x="115" y="60" width="35" height="35" rx="8"/>
+    
+    <!-- Bottom Pair -->
+    <rect x="50" y="115" width="35" height="35" rx="8"/>
+    <rect x="115" y="115" width="35" height="35" rx="8"/>
+  </g>
+  
+  <!-- Subtle connection lines implying scanning -->
+  <line x1="85" y1="77" x2="115" y2="77" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" opacity="0.5"/>
+  <line x1="85" y1="132" x2="115" y2="132" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" opacity="0.5"/>
+</svg>

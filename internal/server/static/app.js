@@ -39,8 +39,10 @@
   }
 
   function escapeHtml(s) {
+    if (s == null) return '';
+    var str = typeof s === 'string' ? s : String(s);
     var div = document.createElement('div');
-    div.textContent = s;
+    div.textContent = str;
     return div.innerHTML;
   }
 
@@ -188,7 +190,7 @@
         }
       })
       .catch(function (err) {
-        content.innerHTML = '<p class="text-red-600">Failed to load: ' + escapeHtml(err.message) + '</p>';
+        content.innerHTML = '<p class="text-red-600">Failed to load: ' + escapeHtml((err && err.message) ? err.message : 'Unknown error') + '</p>';
       });
   }
 
@@ -213,6 +215,159 @@
     });
   }
 
+  function getDeleteConfirmModal() {
+    var overlay = document.getElementById('delete-confirm-overlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'delete-confirm-overlay';
+    overlay.setAttribute('hidden', '');
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'delete-confirm-title');
+    overlay.innerHTML =
+      '<div id="delete-confirm-dialog">' +
+      '<h3 id="delete-confirm-title">Permanently delete this file?</h3>' +
+      '<p class="delete-confirm-path" id="delete-confirm-path"></p>' +
+      '<p>It will be removed from disk. This cannot be undone.</p>' +
+      '<div id="delete-confirm-log" class="delete-confirm-log" aria-live="polite"></div>' +
+      '<div class="delete-confirm-actions">' +
+      '<button type="button" class="delete-confirm-cancel">Cancel</button>' +
+      '<button type="button" class="delete-confirm-submit">Delete</button>' +
+      '</div></div>';
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  function hideDeleteConfirm() {
+    var overlay = document.getElementById('delete-confirm-overlay');
+    if (overlay) overlay.setAttribute('hidden', '');
+  }
+
+  function showDeleteConfirm(path, fileId) {
+    var overlay = getDeleteConfirmModal();
+    var pathEl = overlay.querySelector('#delete-confirm-path');
+    var logEl = overlay.querySelector('#delete-confirm-log');
+    var cancelBtn = overlay.querySelector('.delete-confirm-cancel');
+    var submitBtn = overlay.querySelector('.delete-confirm-submit');
+    if (pathEl) pathEl.textContent = path || '';
+    if (logEl) {
+      logEl.classList.remove('visible');
+      logEl.innerHTML = '';
+    }
+    overlay.removeAttribute('hidden');
+    cancelBtn.focus();
+
+    function cleanup() {
+      submitBtn.disabled = false;
+      cancelBtn.onclick = null;
+      submitBtn.onclick = null;
+    }
+
+    cancelBtn.onclick = function () {
+      cleanup();
+      hideDeleteConfirm();
+    };
+
+    submitBtn.onclick = function () {
+      submitBtn.disabled = true;
+      showDeleteError(null);
+      var logEl = overlay.querySelector('#delete-confirm-log');
+      logEl.classList.add('visible');
+      logEl.innerHTML = '';
+      function appendLogLine(text, isError) {
+        var line = document.createElement('span');
+        line.className = 'log-line' + (isError ? ' error' : '');
+        line.textContent = text;
+        logEl.appendChild(line);
+        logEl.appendChild(document.createTextNode('\n'));
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      var url = '/api/duplicates/files/delete?stream=1';
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'text/plain' },
+        body: JSON.stringify({ file_id: parseInt(fileId, 10) }),
+      })
+        .then(function (r) {
+          if (!r.ok) {
+            return r.text().then(function (text) {
+              var msg = r.statusText;
+              if (text && text.indexOf('ERROR: ') === 0) msg = text.replace(/^ERROR: /, '').trim();
+              throw new Error(msg);
+            });
+          }
+          return r.body.getReader();
+        })
+        .then(function (reader) {
+          var decoder = new TextDecoder();
+          var buffer = '';
+          function handleLine(line) {
+            if (line === 'DONE') {
+              cleanup();
+              hideDeleteConfirm();
+              loadHome(); // refresh UX only after full deletion completion
+              return 'done';
+            }
+            var isError = line.indexOf('ERROR: ') === 0;
+            appendLogLine(line, isError);
+            if (isError) {
+              showDeleteError(line.replace(/^ERROR: /, ''));
+              cleanup();
+              submitBtn.disabled = false;
+              cancelBtn.onclick = function () { hideDeleteConfirm(); };
+              return 'error';
+            }
+            return null;
+          }
+          function read() {
+            return reader.read().then(function (result) {
+              if (result.done) {
+                var tail = buffer.trim();
+                if (tail) {
+                  if (tail === 'DONE') {
+                    cleanup();
+                    hideDeleteConfirm();
+                    loadHome(); // refresh UX only after full deletion completion
+                  } else if (tail.indexOf('ERROR: ') === 0) {
+                    appendLogLine(tail, true);
+                    showDeleteError(tail.replace(/^ERROR: /, ''));
+                    cleanup();
+                    submitBtn.disabled = false;
+                    cancelBtn.onclick = function () { hideDeleteConfirm(); };
+                  } else {
+                    appendLogLine(tail, false);
+                  }
+                }
+                return;
+              }
+              buffer += decoder.decode(result.value, { stream: true });
+              var lines = buffer.split('\n');
+              buffer = lines.pop();
+              for (var i = 0; i < lines.length; i++) {
+                var line = lines[i].trim();
+                if (!line) continue;
+                var status = handleLine(line);
+                if (status === 'done' || status === 'error') return;
+              }
+              return read();
+            });
+          }
+          return read();
+        })
+        .catch(function (err) {
+          cleanup();
+          var message = (err && err.message === 'Failed to fetch')
+            ? 'Delete failed: Could not reach the server. Check the server logs for details.'
+            : ((err && err.message) ? err.message : 'Delete failed');
+          showDeleteError(message);
+          appendLogLine('ERROR: ' + message, true);
+          submitBtn.disabled = false;
+          cancelBtn.onclick = function () { hideDeleteConfirm(); };
+        });
+    };
+  }
+
   function onContentClick(ev) {
     if (ev.target && ev.target.getAttribute && ev.target.getAttribute('data-dismiss-delete-error') !== null) return;
     var deleteBtn = ev.target && ev.target.closest && ev.target.closest('.file-delete');
@@ -220,37 +375,7 @@
       ev.preventDefault();
       var fileId = deleteBtn.dataset.fileId;
       var path = deleteBtn.dataset.path || '';
-      if (!confirm('Permanently delete this file?\n\n' + path + '\n\nIt will be removed from disk. This cannot be undone.')) {
-        return;
-      }
-      deleteBtn.disabled = true;
-      showDeleteError(null);
-      fetch('/api/duplicates/files/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ file_id: parseInt(fileId, 10) }),
-      })
-        .then(function (r) {
-          if (!r.ok) {
-            return r.text().then(function (text) {
-              var msg = r.statusText;
-              try {
-                var body = text ? JSON.parse(text) : {};
-                if (body.error && body.error.length) msg = body.error;
-              } catch (_) {}
-              throw new Error(msg);
-            });
-          }
-          return r.json();
-        })
-        .then(function () {
-          loadHome();
-        })
-        .catch(function (err) {
-          deleteBtn.disabled = false;
-          var message = (err && err.message) ? err.message : 'Delete failed';
-          showDeleteError(message);
-        });
+      showDeleteConfirm(path, fileId);
       return;
     }
 
@@ -275,7 +400,7 @@
       })
       .catch(function (err) {
         btn.disabled = false;
-        btn.title = 'Error: ' + err.message;
+        btn.title = 'Error: ' + ((err && err.message) ? err.message : 'Unknown error');
       });
   }
 
@@ -388,25 +513,26 @@
         content.innerHTML = renderScans(results[0], results[1]);
       })
       .catch(function (err) {
-        content.innerHTML = '<p class="text-red-600">Failed to load: ' + escapeHtml(err.message) + '</p>';
+        content.innerHTML = '<p class="text-red-600">Failed to load: ' + escapeHtml((err && err.message) ? err.message : 'Unknown error') + '</p>';
       });
   }
 
   // --- Scan progress (/scans/:id) ---
   function renderScanProgress(scan) {
     var rootPath = scan && scan.root_path ? escapeHtml(scan.root_path) : '—';
+    var scanId = scan && scan.id != null ? escapeHtml(String(scan.id)) : '';
     return (
       '<h1 class="text-2xl font-bold text-gray-900">Scan ' +
-      scan.id +
+      scanId +
       '</h1>' +
       '<p class="text-gray-600 mt-1">Root: ' +
       rootPath +
       '</p>' +
       '<p class="mt-2">' +
       '<a href="/scans/' +
-      scan.id +
+      scanId +
       '/export" download="scan-' +
-      scan.id +
+      scanId +
       '-files.csv" class="text-blue-600 hover:underline">Download CSV (all files and hashes)</a>' +
       '</p>' +
       '<div id="scan-status" class="mt-4"><p class="text-gray-500">Loading status…</p></div>' +
@@ -424,46 +550,47 @@
     var hashedCount = status.hashed_file_count != null ? status.hashed_file_count : '—';
     var reused = status.hash_reused_count != null ? status.hash_reused_count : '—';
     var errors = status.hash_error_count != null ? status.hash_error_count : '—';
+    var statusId = status && status.id != null ? escapeHtml(String(status.id)) : '';
     var viewDup =
       status.completed_at && status.hash_completed_at
-        ? '<a href="/scans/' + status.id + '/duplicates" class="text-blue-600 hover:underline">View duplicates</a>'
+        ? '<a href="/scans/' + statusId + '/duplicates" class="text-blue-600 hover:underline">View duplicates</a>'
         : '';
     return (
       '<div class="rounded border border-gray-200 p-4 bg-white">' +
       '<table class="min-w-full text-sm">' +
       '<tr><td class="font-medium text-gray-700 pr-4">Status</td><td>' +
-      statusText +
+      escapeHtml(statusText) +
       '</td></tr>' +
       '<tr><td class="font-medium text-gray-700 pr-4">Created</td><td>' +
-      created +
+      escapeHtml(created) +
       '</td></tr>' +
       '<tr><td class="font-medium text-gray-700 pr-4">Completed</td><td>' +
-      completed +
+      escapeHtml(completed) +
       '</td></tr>' +
       '<tr><td class="font-medium text-gray-700 pr-4">Files scanned</td><td>' +
-      fileCount +
+      escapeHtml(String(fileCount)) +
       '</td></tr>' +
       '<tr><td class="font-medium text-gray-700 pr-4">Hash started</td><td>' +
-      hashStarted +
+      escapeHtml(String(hashStarted)) +
       '</td></tr>' +
       '<tr><td class="font-medium text-gray-700 pr-4">Hash completed</td><td>' +
-      hashCompleted +
+      escapeHtml(String(hashCompleted)) +
       '</td></tr>' +
       '<tr><td class="font-medium text-gray-700 pr-4">Files with hash</td><td>' +
-      hashedCount +
+      escapeHtml(String(hashedCount)) +
       '</td></tr>' +
       '<tr><td class="font-medium text-gray-700 pr-4">Reused (no read)</td><td>' +
-      reused +
+      escapeHtml(String(reused)) +
       '</td></tr>' +
       '<tr><td class="font-medium text-gray-700 pr-4">Hash errors</td><td>' +
-      errors +
+      escapeHtml(String(errors)) +
       '</td></tr>' +
       '</table>' +
       '<p class="mt-2 flex gap-4">' +
       '<a href="/scans/' +
-      status.id +
+      statusId +
       '/export" download="scan-' +
-      status.id +
+      statusId +
       '-files.csv" class="text-blue-600 hover:underline">Download CSV</a> ' +
       viewDup +
       '</p></div>'
@@ -488,13 +615,13 @@
               }
             })
             .catch(function (err) {
-              statusEl.innerHTML = '<p class="text-red-600">Failed to load status: ' + escapeHtml(err.message) + '</p>';
+              statusEl.innerHTML = '<p class="text-red-600">Failed to load status: ' + escapeHtml((err && err.message) ? err.message : 'Unknown error') + '</p>';
             });
         }
         poll();
       })
       .catch(function (err) {
-        content.innerHTML = '<p class="text-red-600">Failed to load scan: ' + escapeHtml(err.message) + '</p>';
+        content.innerHTML = '<p class="text-red-600">Failed to load scan: ' + escapeHtml((err && err.message) ? err.message : 'Unknown error') + '</p>';
       });
   }
 
@@ -535,7 +662,8 @@
             statusEl.classList.add('text-green-600');
           })
           .catch(function (err) {
-            statusEl.textContent = 'Failed: ' + err.message;
+            var msg = (err && err.message) ? String(err.message) : 'Request failed';
+            statusEl.textContent = 'Failed: ' + msg;
             statusEl.classList.remove('text-gray-500');
             statusEl.classList.add('text-red-600');
           })
