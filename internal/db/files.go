@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -231,6 +232,44 @@ func UpdateFilesDeletedAtForScan(ctx context.Context, q Querier, scanID, folderI
 		return err
 	}
 	return UpdateFilesDeletedAtInScan(ctx, q, scanID)
+}
+
+// GetFileByID returns the file by ID with full path (folder path + "/" + file path) and hash.
+// Returns (nil, nil) when the file is not found or already deleted (deleted_at IS NOT NULL).
+// Used by the delete handler to get path and hash from DB only; never use client-supplied path/hash.
+func GetFileByID(ctx context.Context, q Querier, fileID int64) (*File, error) {
+	var f File
+	var folderID int64
+	var inode, deviceID sql.NullInt64
+	var hash sql.NullString
+	var hashedAt nullRFC3339Time
+	err := q.QueryRowContext(ctx,
+		`SELECT f.id, f.folder_id, (fo.path || '/' || f.path), f.size, f.mtime, f.inode, f.device_id, f.hash, f.hash_status, f.hashed_at
+		 FROM files f JOIN folders fo ON f.folder_id = fo.id
+		 WHERE f.id = $1 AND f.deleted_at IS NULL`,
+		fileID).Scan(&f.ID, &folderID, &f.Path, &f.Size, &f.MTime, &inode, &deviceID, &hash, &f.HashStatus, &hashedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	f.ScanID = 0
+	f.FolderID = folderID
+	if inode.Valid {
+		v := inode.Int64
+		f.Inode = &v
+	}
+	if deviceID.Valid {
+		v := deviceID.Int64
+		f.DeviceID = &v
+	}
+	if hash.Valid {
+		s := hash.String
+		f.Hash = &s
+	}
+	f.HashedAt = hashedAt.Ptr()
+	return &f, nil
 }
 
 // SetFileDeletedAt sets deleted_at to now for the given file (e.g. after confirming it no longer exists on disk).

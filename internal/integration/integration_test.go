@@ -168,14 +168,20 @@ type apiSummary struct {
 // apiGroupsResponse is the response from GET /api/duplicates/groups.
 type apiGroupsResponse struct {
 	Groups []apiDuplicateGroup `json:"groups"`
-	Total  int64                `json:"total"`
+	Total  int64               `json:"total"`
 }
 
 type apiDuplicateGroup struct {
-	Hash            string `json:"hash"`
-	FileCount       int64  `json:"file_count"`
-	TotalSize       int64  `json:"total_size"`
-	ReclaimableSize int64  `json:"reclaimable_size"`
+	Hash            string           `json:"hash"`
+	FileCount       int64            `json:"file_count"`
+	TotalSize       int64            `json:"total_size"`
+	ReclaimableSize int64            `json:"reclaimable_size"`
+	Files           []apiFileInGroup `json:"files,omitempty"`
+}
+
+type apiFileInGroup struct {
+	ID   int64  `json:"id"`
+	Path string `json:"path"`
 }
 
 type apiScanStatus struct {
@@ -235,10 +241,10 @@ func assertGrouping(t *testing.T, baseURL string, wantGroupCount, wantTotalFiles
 	}
 }
 
-// getGroups fetches duplicate groups from the API (limit 50). Used to obtain a group's hash for refresh tests.
+// getGroups fetches duplicate groups from the API (limit 50, max 50 files per group). Used to obtain a group's hash and file IDs for refresh/delete tests.
 func getGroups(t *testing.T, baseURL string) apiGroupsResponse {
 	t.Helper()
-	resp, err := http.Get(baseURL + "/api/duplicates/groups?limit=50&offset=0")
+	resp, err := http.Get(baseURL + "/api/duplicates/groups?limit=50&offset=0&max_files_per_group=50")
 	if err != nil {
 		t.Fatalf("GET /api/duplicates/groups: %v", err)
 	}
@@ -273,6 +279,31 @@ func refreshGroup(t *testing.T, baseURL, hash string) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /api/duplicates/groups/refresh: status = %d, want 200", resp.StatusCode)
 	}
+}
+
+// deleteFile calls POST /api/duplicates/files/delete with the given file_id. Returns status code and error body if non-2xx.
+func deleteFile(t *testing.T, baseURL string, fileID int64) (statusCode int, errMsg string) {
+	t.Helper()
+	body, err := json.Marshal(map[string]int64{"file_id": fileID})
+	if err != nil {
+		t.Fatalf("marshal delete body: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/duplicates/files/delete", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/duplicates/files/delete: %v", err)
+	}
+	defer resp.Body.Close()
+	var errBody struct {
+		Error string `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&errBody)
+	return resp.StatusCode, errBody.Error
 }
 
 func assertScanStats(t *testing.T, baseURL string, scanID int64, wantFileCount, wantHashed, wantReused, wantRead, wantHashErrors int64) {
@@ -753,4 +784,157 @@ func TestIntegration_12_GroupRefresh_TwoDeleted(t *testing.T) {
 
 	// Only one file left → no duplicate group.
 	assertGrouping(t, baseURL, 0, 0, 0)
+}
+
+// TestIntegration_13_DeleteFile_Success: two files same content, delete one via API → file gone, no duplicate group.
+func TestIntegration_13_DeleteFile_Success(t *testing.T) {
+	ctx := context.Background()
+	baseURL, _ := startService(t)
+	dir := twoFilesOneGroupFixture(t)
+
+	runScanAndHash(ctx, t, baseURL, dir)
+	assertGrouping(t, baseURL, 1, 2, sizePair)
+
+	groups := getGroups(t, baseURL)
+	if len(groups.Groups) != 1 || len(groups.Groups[0].Files) < 2 {
+		t.Fatalf("expected one group with 2 files, got %d groups, %d files", len(groups.Groups), len(groups.Groups[0].Files))
+	}
+	fileID := groups.Groups[0].Files[0].ID
+	deletedPath := groups.Groups[0].Files[0].Path
+
+	status, _ := deleteFile(t, baseURL, fileID)
+	if status != http.StatusOK {
+		t.Fatalf("delete file: status = %d, want 200", status)
+	}
+	if _, err := os.Stat(deletedPath); err == nil {
+		t.Errorf("deleted file should not exist on disk: %s", deletedPath)
+	}
+	assertGrouping(t, baseURL, 0, 0, 0)
+}
+
+// TestIntegration_14_DeleteFile_RejectLastInGroup: after deleting one of two, try to delete the remaining → 400.
+func TestIntegration_14_DeleteFile_RejectLastInGroup(t *testing.T) {
+	ctx := context.Background()
+	baseURL, _ := startService(t)
+	dir := twoFilesOneGroupFixture(t)
+
+	runScanAndHash(ctx, t, baseURL, dir)
+	groups := getGroups(t, baseURL)
+	if len(groups.Groups) != 1 || len(groups.Groups[0].Files) < 2 {
+		t.Fatalf("expected one group with 2 files")
+	}
+	firstID := groups.Groups[0].Files[0].ID
+	secondID := groups.Groups[0].Files[1].ID
+
+	status, _ := deleteFile(t, baseURL, firstID)
+	if status != http.StatusOK {
+		t.Fatalf("first delete: status = %d, want 200", status)
+	}
+	assertGrouping(t, baseURL, 0, 0, 0)
+
+	status, errMsg := deleteFile(t, baseURL, secondID)
+	if status != http.StatusBadRequest {
+		t.Fatalf("second delete (last in group): status = %d, want 400; msg=%s", status, errMsg)
+	}
+	if _, err := os.Stat(groups.Groups[0].Files[1].Path); err != nil {
+		t.Errorf("remaining file should still exist on disk")
+	}
+}
+
+// TestIntegration_15_DeleteFile_RejectWhenFileToDeleteChanged: file to delete was modified on disk → 400.
+func TestIntegration_15_DeleteFile_RejectWhenFileToDeleteChanged(t *testing.T) {
+	ctx := context.Background()
+	baseURL, _ := startService(t)
+	dir := twoFilesOneGroupFixture(t)
+
+	runScanAndHash(ctx, t, baseURL, dir)
+	groups := getGroups(t, baseURL)
+	if len(groups.Groups) != 1 || len(groups.Groups[0].Files) < 2 {
+		t.Fatalf("expected one group with 2 files")
+	}
+	// Overwrite one file (X) with different content so re-hash will not match.
+	time.Sleep(2 * time.Second)
+	if err := os.WriteFile(filepath.Join(dir, "X"), []byte("changed"), 0644); err != nil {
+		t.Fatalf("write X: %v", err)
+	}
+	// Find the file that points to X (path ends with /X or \X).
+	var fileIDToDelete int64
+	for _, f := range groups.Groups[0].Files {
+		if filepath.Base(f.Path) == "X" {
+			fileIDToDelete = f.ID
+			break
+		}
+	}
+	if fileIDToDelete == 0 {
+		t.Fatal("could not find file X in group")
+	}
+
+	status, errMsg := deleteFile(t, baseURL, fileIDToDelete)
+	if status != http.StatusBadRequest {
+		t.Fatalf("delete changed file: status = %d, want 400; msg=%s", status, errMsg)
+	}
+	// File should still exist.
+	if _, err := os.Stat(filepath.Join(dir, "X")); err != nil {
+		t.Errorf("file X should still exist after rejected delete")
+	}
+}
+
+// TestIntegration_16_DeleteFile_RejectWhenOtherFileChanged: other file in group modified → 400.
+func TestIntegration_16_DeleteFile_RejectWhenOtherFileChanged(t *testing.T) {
+	ctx := context.Background()
+	baseURL, _ := startService(t)
+	dir := twoFilesOneGroupFixture(t)
+
+	runScanAndHash(ctx, t, baseURL, dir)
+	groups := getGroups(t, baseURL)
+	if len(groups.Groups) != 1 || len(groups.Groups[0].Files) < 2 {
+		t.Fatalf("expected one group with 2 files")
+	}
+	// Overwrite Y (the "other" file) so verification of the other file fails.
+	time.Sleep(2 * time.Second)
+	if err := os.WriteFile(filepath.Join(dir, "Y"), []byte("changed"), 0644); err != nil {
+		t.Fatalf("write Y: %v", err)
+	}
+	// Try to delete X (the unchanged file).
+	var fileIDToDelete int64
+	for _, f := range groups.Groups[0].Files {
+		if filepath.Base(f.Path) == "X" {
+			fileIDToDelete = f.ID
+			break
+		}
+	}
+	if fileIDToDelete == 0 {
+		t.Fatal("could not find file X in group")
+	}
+
+	status, _ := deleteFile(t, baseURL, fileIDToDelete)
+	if status != http.StatusBadRequest {
+		t.Fatalf("delete when other changed: status = %d, want 400", status)
+	}
+}
+
+// TestIntegration_17_DeleteFile_ThreeFiles_GroupRefreshed: delete one of three → group still exists with 2 files.
+func TestIntegration_17_DeleteFile_ThreeFiles_GroupRefreshed(t *testing.T) {
+	ctx := context.Background()
+	baseURL, _ := startService(t)
+	dir := threeFilesOneGroupFixture(t)
+
+	runScanAndHash(ctx, t, baseURL, dir)
+	assertGrouping(t, baseURL, 1, 3, 2*sizeTriple)
+
+	groups := getGroups(t, baseURL)
+	if len(groups.Groups) != 1 || len(groups.Groups[0].Files) < 3 {
+		t.Fatalf("expected one group with 3 files")
+	}
+	deletedPath := groups.Groups[0].Files[0].Path
+	fileID := groups.Groups[0].Files[0].ID
+
+	status, _ := deleteFile(t, baseURL, fileID)
+	if status != http.StatusOK {
+		t.Fatalf("delete file: status = %d, want 200", status)
+	}
+	if _, err := os.Stat(deletedPath); err == nil {
+		t.Errorf("deleted file should not exist on disk")
+	}
+	assertGrouping(t, baseURL, 1, 2, sizeTriple)
 }
