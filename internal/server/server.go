@@ -561,7 +561,7 @@ func (s *Server) Run(ctx context.Context) error {
 	srv := &http.Server{
 		Handler:      s.mux,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: 10 * time.Minute, // allow long-running streamed responses (e.g. delete with large-file hashing)
 	}
 	go func() {
 		<-ctx.Done()

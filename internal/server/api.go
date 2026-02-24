@@ -812,8 +812,12 @@ func (s *Server) apiDuplicatesFileDelete() http.HandlerFunc {
 		}
 		writeLine("File " + file.Path + " deleted")
 
+		// Use a context that is not canceled when the client disconnects (e.g. after a long hash).
+		// We must complete DB updates so the file is marked deleted and the group refreshed.
+		detachedCtx := context.WithoutCancel(ctx)
+
 		writeLine("Updating database (marking file as deleted)")
-		if err := db.SetFileDeletedAt(ctx, s.db, fileID); err != nil {
+		if err := db.SetFileDeletedAt(detachedCtx, s.db, fileID); err != nil {
 			log.Printf("api delete file: file_id=%d SetFileDeletedAt: %v", fileID, err)
 			writeLine("ERROR: " + err.Error())
 			return
@@ -821,7 +825,7 @@ func (s *Server) apiDuplicatesFileDelete() http.HandlerFunc {
 		writeLine("Database updated")
 
 		writeLine("Refreshing duplicate group")
-		if err := runGroupRefreshForHash(ctx, s.db, groupHash); err != nil {
+		if err := runGroupRefreshForHash(detachedCtx, s.db, groupHash); err != nil {
 			log.Printf("api delete file: file_id=%d runGroupRefreshForHash: %v", fileID, err)
 			writeLine("ERROR: " + err.Error())
 			return
