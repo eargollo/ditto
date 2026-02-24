@@ -547,7 +547,7 @@ func runGroupRefreshForHash(ctx context.Context, q db.Querier, groupHash string)
 	}
 	for _, f := range files {
 		// f.Path is from DB: folder.path || '/' || file.path (our scanner), not user input.
-		// #nosec G304 -- path is server-controlled, not from request
+		// #nosec G304 G703 -- path is server-controlled, not from request
 		info, err := os.Stat(f.Path)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -652,7 +652,7 @@ func (s *Server) apiDuplicatesFileDelete() http.HandlerFunc {
 		}
 		validCount := 0
 		for _, f := range refreshFiles {
-			// #nosec G304 -- path from DB
+			// #nosec G304 G703 -- path from DB only
 			info, err := os.Stat(f.Path)
 			if err != nil || !info.Mode().IsRegular() {
 				continue
@@ -724,7 +724,7 @@ func (s *Server) apiDuplicatesFileDelete() http.HandlerFunc {
 		}
 
 		// Delete from disk (path from DB only).
-		// #nosec G304 -- path from DB
+		// #nosec G304 G703 -- path from DB only
 		if err := os.Remove(file.Path); err != nil {
 			if os.IsNotExist(err) {
 				// File already gone; still mark as deleted in DB so UI is consistent.
