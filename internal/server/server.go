@@ -151,6 +151,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/duplicates/groups", s.apiDuplicatesGroups())
 	s.mux.HandleFunc("POST /api/admin/refresh-duplicate-groups", s.apiAdminRefreshDuplicateGroups())
 	s.mux.HandleFunc("POST /api/duplicates/groups/refresh", s.apiDuplicatesGroupRefresh())
+	s.mux.HandleFunc("POST /api/duplicates/files/delete", s.apiDuplicatesFileDelete())
 
 	staticRoot, _ := fs.Sub(staticFS, "static")
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticRoot))))

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/eargollo/ditto/internal/db"
+	"github.com/eargollo/ditto/internal/hash"
 )
 
 // API response/request DTOs with JSON tags for REST convention (snake_case where desired).
@@ -536,6 +538,41 @@ type apiPostGroupRefreshRequest struct {
 	Hash string `json:"hash"`
 }
 
+// runGroupRefreshForHash updates deleted_at and hash_status for files in the group by Stat'ing each path, then refreshes duplicate_groups_hash.
+// Paths come from DB only (FilesForGroupRefresh). Used by both group-refresh and delete handlers.
+func runGroupRefreshForHash(ctx context.Context, q db.Querier, groupHash string) error {
+	files, err := db.FilesForGroupRefresh(ctx, q, groupHash)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		// f.Path is from DB: folder.path || '/' || file.path (our scanner), not user input.
+		// #nosec G304 -- path is server-controlled, not from request
+		info, err := os.Stat(f.Path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				if err := db.SetFileDeletedAt(ctx, q, f.ID); err != nil {
+					log.Printf("group refresh: set deleted_at for file %d: %v", f.ID, err)
+				}
+			}
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		needReset := info.Size() != f.Size
+		if !needReset && f.HashedMtime != nil {
+			needReset = info.ModTime().Unix() != *f.HashedMtime
+		}
+		if needReset {
+			if err := db.SetFileHashReset(ctx, q, f.ID); err != nil {
+				log.Printf("group refresh: set hash reset for file %d: %v", f.ID, err)
+			}
+		}
+	}
+	return db.RefreshDuplicateGroupsForHashes(ctx, q, []string{groupHash})
+}
+
 func (s *Server) apiDuplicatesGroupRefresh() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -547,48 +584,168 @@ func (s *Server) apiDuplicatesGroupRefresh() http.HandlerFunc {
 			writeAPIError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
-		hash := trimSpace(body.Hash)
-		if hash == "" {
+		groupHash := trimSpace(body.Hash)
+		if groupHash == "" {
 			writeAPIError(w, http.StatusBadRequest, "hash required")
 			return
 		}
 		ctx := r.Context()
-		files, err := db.FilesForGroupRefresh(ctx, s.db, hash)
+		if err := runGroupRefreshForHash(ctx, s.db, groupHash); err != nil {
+			log.Printf("api duplicates group refresh: %v", err)
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+
+// apiPostDeleteFileRequest is the body for POST /api/duplicates/files/delete. Only file_id is accepted; paths/hashes come from DB only.
+type apiPostDeleteFileRequest struct {
+	FileID int64 `json:"file_id"`
+}
+
+func (s *Server) apiDuplicatesFileDelete() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body apiPostDeleteFileRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+		fileID := body.FileID
+		if fileID <= 0 {
+			log.Printf("api delete file: attempt file_id=%d rejected: invalid file_id", fileID)
+			writeAPIError(w, http.StatusBadRequest, "file_id required and must be positive")
+			return
+		}
+		log.Printf("api delete file: attempt file_id=%d", fileID)
+		ctx := r.Context()
+
+		// Load file from DB only; never use client-supplied path/hash.
+		file, err := db.GetFileByID(ctx, s.db, fileID)
 		if err != nil {
-			log.Printf("api duplicates group refresh: list files: %v", err)
+			log.Printf("api delete file: file_id=%d GetFileByID error: %v", fileID, err)
 			writeAPIError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		for _, f := range files {
-			// f.Path is from DB: folder.path || '/' || file.path (our scanner), not user input.
-			// #nosec G703 -- path is server-controlled, not from request
+		if file == nil {
+			log.Printf("api delete file: file_id=%d rejected: file not found or already deleted", fileID)
+			writeAPIError(w, http.StatusBadRequest, "file not found or already deleted")
+			return
+		}
+		if file.Hash == nil || *file.Hash == "" {
+			log.Printf("api delete file: file_id=%d rejected: file has no hash", fileID)
+			writeAPIError(w, http.StatusBadRequest, "file has no hash; cannot delete")
+			return
+		}
+		groupHash := *file.Hash
+
+		// Guard: at least one file must remain. Count only files that exist on disk and have unchanged size/mtime.
+		refreshFiles, err := db.FilesForGroupRefresh(ctx, s.db, groupHash)
+		if err != nil {
+			log.Printf("api delete file: FilesForGroupRefresh: %v", err)
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		validCount := 0
+		for _, f := range refreshFiles {
+			// #nosec G304 -- path from DB
 			info, err := os.Stat(f.Path)
-			if err != nil {
-				if os.IsNotExist(err) {
-					if err := db.SetFileDeletedAt(ctx, s.db, f.ID); err != nil {
-						log.Printf("api duplicates group refresh: set deleted_at for file %d: %v", f.ID, err)
-					}
-				}
+			if err != nil || !info.Mode().IsRegular() {
 				continue
 			}
-			if !info.Mode().IsRegular() {
+			if info.Size() != f.Size {
 				continue
 			}
-			needReset := info.Size() != f.Size
-			if !needReset && f.HashedMtime != nil {
-				needReset = info.ModTime().Unix() != *f.HashedMtime
+			if f.HashedMtime != nil && info.ModTime().Unix() != *f.HashedMtime {
+				continue
 			}
-			if needReset {
-				if err := db.SetFileHashReset(ctx, s.db, f.ID); err != nil {
-					log.Printf("api duplicates group refresh: set hash reset for file %d: %v", f.ID, err)
-				}
-			}
+			validCount++
 		}
-		if err := db.RefreshDuplicateGroupsForHashes(ctx, s.db, []string{hash}); err != nil {
-			log.Printf("api duplicates group refresh: refresh hashes: %v", err)
+		if validCount <= 1 {
+			log.Printf("api delete file: file_id=%d rejected: at least one file must remain in group (valid count=%d)", fileID, validCount)
+			writeAPIError(w, http.StatusBadRequest, "cannot delete: at least one file must remain in the group (some files may be missing or changed; try refreshing the group)")
+			return
+		}
+
+		// Guard: re-hash file to delete and one other file; both must match stored hashes.
+		groupFiles, err := db.FilesInHashGroupByHash(ctx, s.db, groupHash, 0)
+		if err != nil {
+			log.Printf("api delete file: FilesInHashGroupByHash: %v", err)
 			writeAPIError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		var other *db.File
+		for i := range groupFiles {
+			if groupFiles[i].ID != fileID {
+				other = &groupFiles[i]
+				break
+			}
+		}
+		if other == nil || other.Hash == nil {
+			log.Printf("api delete file: file_id=%d rejected: no other file in group to verify", fileID)
+			writeAPIError(w, http.StatusBadRequest, "no other file in group to verify")
+			return
+		}
+		computedToDelete, err := hash.HashFile(file.Path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				log.Printf("api delete file: file_id=%d rejected: file not found on disk path=%s", fileID, file.Path)
+				writeAPIError(w, http.StatusBadRequest, "file not found on disk")
+				return
+			}
+			log.Printf("api delete file: file_id=%d hash error: %v", fileID, err)
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if computedToDelete != *file.Hash {
+			log.Printf("api delete file: file_id=%d rejected: file content has changed", fileID)
+			writeAPIError(w, http.StatusBadRequest, "file content has changed; refresh the group and try again")
+			return
+		}
+		computedOther, err := hash.HashFile(other.Path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				log.Printf("api delete file: file_id=%d rejected: other file in group missing on disk", fileID)
+				writeAPIError(w, http.StatusBadRequest, "another file in the group is missing on disk; refresh the group and try again")
+				return
+			}
+			log.Printf("api delete file: file_id=%d hash other error: %v", fileID, err)
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if computedOther != *other.Hash {
+			log.Printf("api delete file: file_id=%d rejected: file or group content has changed", fileID)
+			writeAPIError(w, http.StatusBadRequest, "file or group content has changed; refresh the group and try again")
+			return
+		}
+
+		// Delete from disk (path from DB only).
+		// #nosec G304 -- path from DB
+		if err := os.Remove(file.Path); err != nil {
+			if os.IsNotExist(err) {
+				// File already gone; still mark as deleted in DB so UI is consistent.
+				log.Printf("api delete file: file_id=%d path=%s: file already missing on disk, marking deleted in DB", fileID, file.Path)
+			} else {
+				log.Printf("api delete file: file_id=%d os.Remove failed: %v", fileID, err)
+				writeAPIError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		if err := db.SetFileDeletedAt(ctx, s.db, fileID); err != nil {
+			log.Printf("api delete file: file_id=%d SetFileDeletedAt: %v", fileID, err)
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := runGroupRefreshForHash(ctx, s.db, groupHash); err != nil {
+			log.Printf("api delete file: file_id=%d runGroupRefreshForHash: %v", fileID, err)
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		log.Printf("api delete file: deleted file_id=%d path=%s", fileID, file.Path)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
 }

@@ -257,3 +257,86 @@ func TestAPI_PostScans_invalidJSON_returns400WithError(t *testing.T) {
 		t.Error("want error field in 400 response")
 	}
 }
+
+// --- POST /api/duplicates/files/delete ---
+
+func TestAPI_DeleteFile_getReturns404(t *testing.T) {
+	srv, _ := testServer(t)
+	// Route is registered for POST only; GET does not match and falls through to 404.
+	req := httptest.NewRequest(http.MethodGet, "/api/duplicates/files/delete", nil)
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET /api/duplicates/files/delete: code = %d, want 404", rec.Code)
+	}
+}
+
+func TestAPI_DeleteFile_invalidJSON_returns400(t *testing.T) {
+	srv, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/duplicates/files/delete", bytes.NewReader([]byte(`{invalid`)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("POST delete invalid JSON: code = %d, want 400", rec.Code)
+	}
+}
+
+func TestAPI_DeleteFile_missingOrInvalidFileID_returns400(t *testing.T) {
+	srv, _ := testServer(t)
+	for _, body := range []string{`{}`, `{"file_id":0}`, `{"file_id":-1}`} {
+		req := httptest.NewRequest(http.MethodPost, "/api/duplicates/files/delete", bytes.NewReader([]byte(body)))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("POST delete %s: code = %d, want 400", body, rec.Code)
+		}
+	}
+}
+
+func TestAPI_DeleteFile_notFound_returns400(t *testing.T) {
+	srv, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/duplicates/files/delete", bytes.NewReader([]byte(`{"file_id":99999}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("POST delete file_id=99999: code = %d, want 400", rec.Code)
+	}
+	var errBody map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&errBody); err != nil {
+		t.Fatalf("response JSON: %v", err)
+	}
+	if errBody["error"] == nil {
+		t.Error("want error field in 400 response")
+	}
+}
+
+func TestAPI_DeleteFile_fileHasNoHash_returns400(t *testing.T) {
+	srv, database := testServer(t)
+	ctx := context.Background()
+	folderID, err := db.AddFolder(ctx, database, "/tmp/unit-delete")
+	if err != nil {
+		t.Fatalf("AddFolder: %v", err)
+	}
+	fileID, err := db.UpsertFile(ctx, database, folderID, "no-hash.txt", 100, 12345, nil, nil)
+	if err != nil {
+		t.Fatalf("UpsertFile: %v", err)
+	}
+	// File exists but has hash_status=pending and no hash; delete should reject
+	req := httptest.NewRequest(http.MethodPost, "/api/duplicates/files/delete", bytes.NewReader([]byte(`{"file_id":`+strconv.FormatInt(fileID, 10)+`}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("POST delete file with no hash: code = %d, want 400", rec.Code)
+	}
+	var errBody map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&errBody); err != nil {
+		t.Fatalf("response JSON: %v", err)
+	}
+	if errBody["error"] == nil {
+		t.Error("want error field in 400 response")
+	}
+}

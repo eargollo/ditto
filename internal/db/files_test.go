@@ -5,6 +5,74 @@ import (
 	"testing"
 )
 
+// TestGetFileByID_found verifies GetFileByID returns the file with full path and hash when it exists and is not deleted.
+func TestGetFileByID_found(t *testing.T) {
+	ctx := context.Background()
+	q := TestPostgresDB(t)
+
+	folderID, _ := AddFolder(ctx, q, "/tmp")
+	fileID, err := UpsertFile(ctx, q, folderID, "foo", 100, 1707292800, nil, nil)
+	if err != nil {
+		t.Fatalf("UpsertFile: %v", err)
+	}
+	_, err = q.ExecContext(ctx, "UPDATE files SET hash = 'abc123', hash_status = 'done', hashed_at = (NOW() AT TIME ZONE 'UTC'), hashed_mtime = 1707292800 WHERE id = $1", fileID)
+	if err != nil {
+		t.Fatalf("UPDATE hash: %v", err)
+	}
+
+	f, err := GetFileByID(ctx, q, fileID)
+	if err != nil {
+		t.Fatalf("GetFileByID: %v", err)
+	}
+	if f == nil {
+		t.Fatal("GetFileByID: got nil, want file")
+	}
+	if f.ID != fileID || f.Path != "/tmp/foo" || f.Size != 100 {
+		t.Errorf("GetFileByID: id=%d path=%q size=%d, want id=%d path=/tmp/foo size=100", f.ID, f.Path, f.Size, fileID)
+	}
+	if f.Hash == nil || *f.Hash != "abc123" {
+		t.Errorf("GetFileByID: hash=%v, want abc123", f.Hash)
+	}
+	if f.HashStatus != "done" {
+		t.Errorf("GetFileByID: hash_status=%q, want done", f.HashStatus)
+	}
+	if f.FolderID != folderID {
+		t.Errorf("GetFileByID: folder_id=%d, want %d", f.FolderID, folderID)
+	}
+}
+
+// TestGetFileByID_notFound verifies GetFileByID returns (nil, nil) for non-existent ID.
+func TestGetFileByID_notFound(t *testing.T) {
+	ctx := context.Background()
+	q := TestPostgresDB(t)
+
+	f, err := GetFileByID(ctx, q, 99999)
+	if err != nil {
+		t.Fatalf("GetFileByID: %v", err)
+	}
+	if f != nil {
+		t.Errorf("GetFileByID: got %+v, want nil", f)
+	}
+}
+
+// TestGetFileByID_deletedReturnsNil verifies GetFileByID returns (nil, nil) when the file has deleted_at set.
+func TestGetFileByID_deletedReturnsNil(t *testing.T) {
+	ctx := context.Background()
+	q := TestPostgresDB(t)
+
+	folderID, _ := AddFolder(ctx, q, "/tmp")
+	fileID, _ := UpsertFile(ctx, q, folderID, "gone", 10, 100, nil, nil)
+	_, _ = q.ExecContext(ctx, "UPDATE files SET hash = 'x', hash_status = 'done', deleted_at = (NOW() AT TIME ZONE 'UTC') WHERE id = $1", fileID)
+
+	f, err := GetFileByID(ctx, q, fileID)
+	if err != nil {
+		t.Fatalf("GetFileByID: %v", err)
+	}
+	if f != nil {
+		t.Errorf("GetFileByID (deleted file): got %+v, want nil", f)
+	}
+}
+
 func ptrInt64(n int64) *int64 { v := n; return &v }
 
 func TestUpsertFile_InsertFileScan_and_GetFilesByScanID(t *testing.T) {
